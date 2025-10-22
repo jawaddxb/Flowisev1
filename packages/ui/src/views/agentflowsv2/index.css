@@ -93,3 +93,16 @@
     color: #ffffff;
     fill: #ffffff;
 }
+
+/* Copilot pulse animation for changed nodes */
+.copilot-pulse {
+    outline: 3px solid #4f46e5;
+    animation: copilotPulse 1s ease-in-out 3;
+    border-radius: 8px;
+}
+
+@keyframes copilotPulse {
+    0% { outline-color: #4f46e5; }
+    50% { outline-color: #a78bfa; }
+    100% { outline-color: #4f46e5; }
+}

@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express'
 import path from 'path'
+import fs from 'fs'
 import cors from 'cors'
 import http from 'http'
 import cookieParser from 'cookie-parser'
@@ -338,14 +339,61 @@ export class App {
         // Serve UI static
         // ----------------------------------------
 
+        // Prefer local workspace UI build if present, else fall back to node_modules package
         const packagePath = getNodeModulesPackagePath('flowise-ui')
-        const uiBuildPath = path.join(packagePath, 'build')
-        const uiHtmlPath = path.join(packagePath, 'build', 'index.html')
+        const pkgUiBuild = path.join(packagePath, 'build')
+        const candidates = [
+            path.resolve(process.cwd(), '../../ui/build'),
+            path.resolve(process.cwd(), '../ui/build'),
+            path.resolve(__dirname, '../../ui/build'),
+            path.resolve(__dirname, '../../../ui/build'),
+            pkgUiBuild
+        ]
+        const uiBuildPath = candidates.find((p) => {
+            try {
+                return fs.existsSync(path.join(p, 'index.html'))
+            } catch {
+                return false
+            }
+        }) || pkgUiBuild
+        const uiHtmlPath = path.join(uiBuildPath, 'index.html')
 
-        this.app.use('/', express.static(uiBuildPath))
+        logger.info(`🖥️ [server]: Serving UI from ${uiBuildPath}`)
+        
+        // Configure static file serving with cache control
+        this.app.use(
+            '/',
+            express.static(uiBuildPath, {
+                maxAge: process.env.NODE_ENV === 'production' ? '1y' : 0,
+                etag: process.env.NODE_ENV === 'production',
+                lastModified: true,
+                setHeaders: (res, path) => {
+                    // For HTML files, never cache (always revalidate)
+                    if (path.endsWith('.html')) {
+                        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+                        res.setHeader('Pragma', 'no-cache')
+                        res.setHeader('Expires', '0')
+                    }
+                    // For hashed assets (JS/CSS with content hash in filename), cache aggressively in production
+                    else if (process.env.NODE_ENV === 'production' && /\-[a-zA-Z0-9_-]{8,}\.(js|css)$/.test(path)) {
+                        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+                    }
+                    // In development, don't cache at all
+                    else if (process.env.NODE_ENV !== 'production') {
+                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+                        res.setHeader('Pragma', 'no-cache')
+                        res.setHeader('Expires', '0')
+                    }
+                }
+            })
+        )
 
         // All other requests not handled will return React app
         this.app.use((req: Request, res: Response) => {
+            // Disable caching for HTML
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+            res.setHeader('Pragma', 'no-cache')
+            res.setHeader('Expires', '0')
             res.sendFile(uiHtmlPath)
         })
 

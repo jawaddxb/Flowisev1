@@ -25,6 +25,13 @@ import { OrganizationUser } from '../../enterprise/database/entities/organizatio
 import { Workspace } from '../../enterprise/database/entities/workspace.entity'
 import { WorkspaceUser } from '../../enterprise/database/entities/workspace-user.entity'
 import { LoginMethod } from '../../enterprise/database/entities/login-method.entity'
+import { CopilotConversation } from './CopilotConversation'
+import { CopilotMessage } from './CopilotMessage'
+import { CopilotEdit } from './CopilotEdit'
+import { CopilotState } from './CopilotState'
+import { Orchestrator } from './Orchestrator'
+import { OrchestratorRun } from './OrchestratorRun'
+import { ProviderConnection } from './ProviderConnection'
 
 export const entities = {
     ChatFlow,
@@ -55,5 +62,12 @@ export const entities = {
     OrganizationUser,
     Workspace,
     WorkspaceUser,
-    LoginMethod
+    LoginMethod,
+    CopilotConversation,
+    CopilotMessage,
+    CopilotEdit,
+    CopilotState,
+    Orchestrator,
+    OrchestratorRun,
+    ProviderConnection
 }

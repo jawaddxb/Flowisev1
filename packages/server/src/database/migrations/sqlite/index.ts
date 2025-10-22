@@ -38,6 +38,11 @@ import { AddTextToSpeechToChatFlow1754986486669 } from './1754986486669-AddTextT
 import { ModifyChatflowType1755066758601 } from './1755066758601-ModifyChatflowType'
 import { AddTextToSpeechToChatFlow1759419136055 } from './1759419136055-AddTextToSpeechToChatFlow'
 import { AddChatFlowNameIndex1759424923093 } from './1759424923093-AddChatFlowNameIndex'
+import { AddCopilotTables1761040600000 } from './1761040600000-AddCopilotTables'
+import { AddCopilotState1761040800000 } from './1761040800000-AddCopilotState'
+import { AddOrchestratorTables1762000000000 } from './1762000000000-AddOrchestratorTables'
+import { AddOrchestratorRunFields1762000001000 } from './1762000001000-AddOrchestratorRunFields'
+import { AddOrchestratorDescription1762000002000 } from './1762000002000-AddOrchestratorDescription'
 
 import { AddAuthTables1720230151482 } from '../../../enterprise/database/migrations/sqlite/1720230151482-AddAuthTables'
 import { AddWorkspace1720230151484 } from '../../../enterprise/database/migrations/sqlite/1720230151484-AddWorkspace'
@@ -102,5 +107,10 @@ export const sqliteMigrations = [
     AddTextToSpeechToChatFlow1754986486669,
     ModifyChatflowType1755066758601,
     AddTextToSpeechToChatFlow1759419136055,
-    AddChatFlowNameIndex1759424923093
+    AddChatFlowNameIndex1759424923093,
+    AddCopilotTables1761040600000,
+    AddCopilotState1761040800000,
+    AddOrchestratorTables1762000000000,
+    AddOrchestratorRunFields1762000001000,
+    AddOrchestratorDescription1762000002000
 ]

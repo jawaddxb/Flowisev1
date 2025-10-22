@@ -86,3 +86,38 @@
     color: #ffffff;
     fill: #ffffff;
 }
+
+/* Copilot pulse animation for changed nodes */
+.copilot-pulse {
+    outline: 3px solid #4f46e5;
+    animation: copilotPulse 1s ease-in-out 3;
+    border-radius: 8px;
+}
+
+@keyframes copilotPulse {
+    0% { outline-color: #4f46e5; }
+    50% { outline-color: #a78bfa; }
+    100% { outline-color: #4f46e5; }
+}
+
+.copilot-highlight-pulse {
+    outline: 3px solid #ff6b6b;
+    animation: copilotHighlightPulse 1.5s ease-in-out infinite;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(255, 107, 107, 0.5);
+}
+
+@keyframes copilotHighlightPulse {
+    0% { 
+        outline-color: #ff6b6b;
+        outline-width: 3px;
+    }
+    50% { 
+        outline-color: #ff8787;
+        outline-width: 5px;
+    }
+    100% { 
+        outline-color: #ff6b6b;
+        outline-width: 3px;
+    }
+}

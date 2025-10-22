@@ -26,11 +26,16 @@ import AddNodes from './AddNodes'
 import ConfirmDialog from '@/ui-component/dialog/ConfirmDialog'
 import ChatPopUp from '@/views/chatmessage/ChatPopUp'
 import VectorStorePopUp from '@/views/vectorstore/VectorStorePopUp'
+import WorkflowCopilotOverlay from '@/views/copilot/WorkflowCopilotOverlay'
+import WorkflowCopilotDock from '@/views/copilot/WorkflowCopilotDock'
+import CanvasSummaryCard from './CanvasSummaryCard'
+import TemplateIntroCard from './TemplateIntroCard'
 import { flowContext } from '@/store/context/ReactFlowContext'
 
 // API
 import nodesApi from '@/api/nodes'
 import chatflowsApi from '@/api/chatflows'
+import copilotApi from '@/api/copilot'
 
 // Hooks
 import useApi from '@/hooks/useApi'
@@ -57,6 +62,26 @@ import { FLOWISE_CREDENTIAL_ID } from '@/store/constant'
 
 const nodeTypes = { customNode: CanvasNode, stickyNote: StickyNote }
 const edgeTypes = { buttonedge: ButtonEdge }
+
+// Helper to detect template key from flow name or node pattern
+const detectTemplateKey = (flowName, nodes) => {
+    const name = (flowName || '').toLowerCase()
+    if (name.includes('deep research') || name.includes('subagent')) {
+        return 'deep-research-subagents'
+    }
+    if (name.includes('rag') || name.includes('chatbot') || name.includes('q&a')) {
+        return 'rag-chatbot'
+    }
+    
+    // Pattern detection from nodes
+    const hasSubAgents = nodes.some(n => n.data?.name === 'spawnSubAgents' || n.data?.label?.includes('SubAgent'))
+    if (hasSubAgents) return 'deep-research-subagents'
+    
+    const hasVectorStore = nodes.some(n => n.data?.category === 'Vector Stores')
+    if (hasVectorStore) return 'rag-chatbot'
+    
+    return null
+}
 
 // ==============================|| CANVAS ||============================== //
 
@@ -105,6 +130,9 @@ const Canvas = () => {
     const [lastUpdatedDateTime, setLasUpdatedDateTime] = useState('')
     const [chatflowName, setChatflowName] = useState('')
     const [flowData, setFlowData] = useState('')
+    const [copilotOpen, setCopilotOpen] = useState(false)
+    const [copilotMax, setCopilotMax] = useState(false)
+    const [templateKey, setTemplateKey] = useState(null)
 
     // ==============================|| Chatflow API ||============================== //
 
@@ -419,6 +447,30 @@ const Canvas = () => {
             setNodes(initialFlow.nodes || [])
             setEdges(initialFlow.edges || [])
             dispatch({ type: SET_CHATFLOW, chatflow })
+            
+            // Detect template key from flow name or node pattern
+            const detectedTemplate = detectTemplateKey(chatflow.name, initialFlow.nodes || [])
+            setTemplateKey(detectedTemplate)
+            
+            // Check for stale Copilot state and clear if needed (async, non-blocking)
+            const checkStaleState = async () => {
+                try {
+                    const historyResp = await copilotApi.getHistory(chatflow.id)
+                    if (historyResp?.data?.updatedAt) {
+                        const stateAge = Date.now() - new Date(historyResp.data.updatedAt).getTime()
+                        const oneDayMs = 86400000
+                        if (stateAge > oneDayMs) {
+                            await copilotApi.clearHistory(chatflow.id)
+                        }
+                    }
+                } catch (e) {
+                    // Ignore errors; stale check is non-critical
+                }
+            }
+            checkStaleState()
+            
+            // Open Copilot by default after flow loads
+            setCopilotOpen(true)
         } else if (getSpecificChatflowApi.error) {
             errorFailed(`Failed to retrieve ${canvasTitle}: ${getSpecificChatflowApi.error.response.data.message}`)
         }
@@ -433,6 +485,22 @@ const Canvas = () => {
             dispatch({ type: SET_CHATFLOW, chatflow })
             saveChatflowSuccess()
             window.history.replaceState(state, null, `/${isAgentCanvas ? 'agentcanvas' : 'canvas'}/${chatflow.id}`)
+            // Trigger auto-apply after save (debounced)
+            setTimeout(() => {
+                copilotApi.autoApply({ flowId: chatflow.id }).then((result) => {
+                    if (result?.data?.applied && result?.data?.flowData) {
+                        handleLoadFlow(JSON.stringify(result.data.flowData))
+                        // Emit summary update event
+                        if (result?.data?.summary) {
+                            window.dispatchEvent(new CustomEvent('copilot:summary-updated', { 
+                                detail: { flowId: chatflow.id, summary: result.data.summary } 
+                            }))
+                        }
+                    }
+                }).catch(() => {
+                    // Silent fail - auto-apply is optional
+                })
+            }, 1500)
         } else if (createNewChatflowApi.error) {
             errorFailed(`Failed to retrieve ${canvasTitle}: ${createNewChatflowApi.error.response.data.message}`)
         }
@@ -446,6 +514,22 @@ const Canvas = () => {
             dispatch({ type: SET_CHATFLOW, chatflow: updateChatflowApi.data })
             setLasUpdatedDateTime(updateChatflowApi.data.updatedDate)
             saveChatflowSuccess()
+            // Trigger auto-apply after save (debounced)
+            setTimeout(() => {
+                copilotApi.autoApply({ flowId: updateChatflowApi.data.id }).then((result) => {
+                    if (result?.data?.applied && result?.data?.flowData) {
+                        handleLoadFlow(JSON.stringify(result.data.flowData))
+                        // Emit summary update event
+                        if (result?.data?.summary) {
+                            window.dispatchEvent(new CustomEvent('copilot:summary-updated', { 
+                                detail: { flowId: updateChatflowApi.data.id, summary: result.data.summary } 
+                            }))
+                        }
+                    }
+                }).catch(() => {
+                    // Silent fail - auto-apply is optional
+                })
+            }, 1500)
         } else if (updateChatflowApi.error) {
             errorFailed(`Failed to retrieve ${canvasTitle}: ${updateChatflowApi.error.response.data.message}`)
         }
@@ -507,6 +591,8 @@ const Canvas = () => {
             } else {
                 setNodes([])
                 setEdges([])
+                // default-open Copilot on new/empty flows
+                setCopilotOpen(true)
             }
             dispatch({
                 type: SET_CHATFLOW,
@@ -525,6 +611,74 @@ const Canvas = () => {
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
+
+    // expose global open function for header sparkle button
+    useEffect(() => {
+        window.__openCopilotOverlay = () => { setCopilotOpen(true); setCopilotMax(false) }
+        return () => {
+            delete window.__openCopilotOverlay
+        }
+    }, [])
+
+    // Listen for copilot highlight events
+    useEffect(() => {
+        const onHighlight = (e) => {
+            if (!e?.detail?.nodes) return
+            const ids = new Set(e.detail.nodes.map((n) => n.id))
+            setNodes((nds) =>
+                nds.map((n) => ({ ...n, data: { ...n.data, copilotChanged: ids.has(n.id) } }))
+            )
+            // Clear highlight after 4s
+            setTimeout(() => {
+                setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, copilotChanged: false } })))
+            }, 4000)
+        }
+        
+        // Listen for single node highlight events
+        const onHighlightNode = (e) => {
+            if (!e?.detail?.nodeId) return
+            const nodeId = e.detail.nodeId
+            setNodes((nds) =>
+                nds.map((n) => ({
+                    ...n,
+                    data: { ...n.data, copilotHighlight: n.id === nodeId },
+                    selected: n.id === nodeId
+                }))
+            )
+            // Scroll to node if reactFlowInstance is available
+            if (reactFlowInstance) {
+                const node = reactFlowInstance.getNode(nodeId)
+                if (node) {
+                    reactFlowInstance.setCenter(node.position.x + 150, node.position.y + 250, { zoom: 1, duration: 800 })
+                }
+            }
+            // Clear highlight after 5s
+            setTimeout(() => {
+                setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, copilotHighlight: false } })))
+            }, 5000)
+        }
+        
+        const onScroll = (e) => {
+            if (!e?.detail?.nodeId || !reactFlowInstance) return
+            const node = reactFlowInstance.getNode(e.detail.nodeId)
+            if (node) {
+                reactFlowInstance.fitView({ 
+                    nodes: [{ id: node.id }], 
+                    padding: 0.2, 
+                    duration: 600 
+                })
+            }
+        }
+        
+        window.addEventListener('copilot:highlight-nodes', onHighlight)
+        window.addEventListener('copilot:highlightNode', onHighlightNode)
+        window.addEventListener('copilot:scroll-to-node', onScroll)
+        return () => {
+            window.removeEventListener('copilot:highlight-nodes', onHighlight)
+            window.removeEventListener('copilot:highlightNode', onHighlightNode)
+            window.removeEventListener('copilot:scroll-to-node', onScroll)
+        }
+    }, [setNodes, reactFlowInstance])
 
     useEffect(() => {
         setCanvasDataStore(canvas)
@@ -581,6 +735,12 @@ const Canvas = () => {
                     </Toolbar>
                 </AppBar>
                 <Box sx={{ pt: '70px', height: '100vh', width: '100%' }}>
+                    <TemplateIntroCard 
+                        flowId={chatflow?.id} 
+                        templateKey={templateKey}
+                        onStartCopilot={() => { setCopilotOpen(true); setCopilotMax(false) }}
+                    />
+                    <CanvasSummaryCard flowId={chatflow?.id} />
                     <div className='reactflow-parent-wrapper'>
                         <div className='reactflow-wrapper' ref={reactFlowWrapper}>
                             <ReactFlow
@@ -662,6 +822,42 @@ const Canvas = () => {
                     </div>
                 </Box>
                 <ConfirmDialog />
+                {!copilotMax && (
+                    <WorkflowCopilotDock
+                        open={copilotOpen}
+                        onToggleMax={() => setCopilotMax(true)}
+                        flowId={chatflow?.id}
+                        currentFlowData={reactFlowInstance?.toObject()}
+                        onFlowUpdate={(flowData) => {
+                            try {
+                                if (!flowData) return
+                                const parsed = typeof flowData === 'string' ? JSON.parse(flowData) : flowData
+                                handleLoadFlow(JSON.stringify(parsed))
+                            } catch (e) {
+                                console.error('Failed to update flow:', e)
+                            }
+                        }}
+                    />
+                )}
+                {copilotMax && (
+                    <WorkflowCopilotOverlay
+                        open={copilotOpen}
+                        onClose={() => { setCopilotOpen(false); setCopilotMax(false) }}
+                        chatflow={chatflow}
+                        isAgentCanvas={isAgentCanvas}
+                        onApplyPreview={(f) => {
+                            try {
+                                if (!f) return
+                                const parsed = typeof f === 'string' ? JSON.parse(f) : f
+                                handleLoadFlow(JSON.stringify(parsed))
+                            } catch (e) {}
+                        }}
+                        onRun={() => {
+                            setCopilotOpen(false)
+                            setCopilotMax(false)
+                        }}
+                    />
+                )}
             </Box>
         </>
     )

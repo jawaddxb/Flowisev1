@@ -91,7 +91,7 @@ const CanvasNode = ({ data }) => {
     }, [canvas.componentNodes, data.name, data.version])
 
     return (
-        <>
+        <div className={data?.copilotChanged ? 'copilot-pulse' : (data?.copilotHighlight ? 'copilot-highlight-pulse' : '')}>
             <NodeCardWrapper
                 content={false}
                 sx={{
@@ -286,7 +286,7 @@ const CanvasNode = ({ data }) => {
                 onCancel={() => setShowDialog(false)}
             ></AdditionalParamsDialog>
             <NodeInfoDialog show={showInfoDialog} dialogProps={infoDialogProps} onCancel={() => setShowInfoDialog(false)}></NodeInfoDialog>
-        </>
+        </div>
     )
 }
 

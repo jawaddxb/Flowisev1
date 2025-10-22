@@ -23,7 +23,8 @@ import {
     IconLockCheck,
     IconFileDatabase,
     IconShieldLock,
-    IconListCheck
+    IconListCheck,
+    IconGitMerge
 } from '@tabler/icons-react'
 
 // constant
@@ -51,7 +52,8 @@ const icons = {
     IconLockCheck,
     IconFileDatabase,
     IconShieldLock,
-    IconListCheck
+    IconListCheck,
+    IconGitMerge
 }
 
 // ==============================|| DASHBOARD MENU ITEMS ||============================== //
@@ -83,6 +85,15 @@ const dashboard = {
                     icon: icons.IconUsersGroup,
                     breadcrumbs: true,
                     permission: 'agentflows:view'
+                },
+                {
+                    id: 'orchestrator',
+                    title: 'Orchestrator',
+                    type: 'item',
+                    url: '/orchestrator',
+                    icon: icons.IconGitMerge,
+                    breadcrumbs: true,
+                    permission: 'chatflows:view'
                 },
                 {
                     id: 'executions',

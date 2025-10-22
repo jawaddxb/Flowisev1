@@ -61,6 +61,12 @@ const Logs = Loadable(lazy(() => import('@/views/serverlogs')))
 // executions routing
 const Executions = Loadable(lazy(() => import('@/views/agentexecutions')))
 
+// orchestrator routing
+const OrchestratorList = Loadable(lazy(() => import('@/views/orchestrator')))
+const OrchestratorCanvas = Loadable(lazy(() => import('@/views/orchestrator/Canvas')))
+const OrchestratorRunHistory = Loadable(lazy(() => import('@/views/orchestrator/RunHistory')))
+const OrchestratorDebug = Loadable(lazy(() => import('@/views/orchestrator/OrchestratorDebug')))
+
 // enterprise features
 const UsersPage = Loadable(lazy(() => import('@/views/users')))
 const RolesPage = Loadable(lazy(() => import('@/views/roles')))
@@ -355,6 +361,18 @@ const MainRoutes = {
         {
             path: '/sso-success',
             element: <SSOSuccess />
+        },
+        {
+            path: '/orchestrator',
+            element: <OrchestratorList />
+        },
+        {
+            path: '/orchestrator/canvas/:id?',
+            element: <OrchestratorDebug />
+        },
+        {
+            path: '/orchestrator/runs/:id',
+            element: <OrchestratorRunHistory />
         }
     ]
 }

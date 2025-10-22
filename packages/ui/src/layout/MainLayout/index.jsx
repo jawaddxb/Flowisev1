@@ -4,7 +4,7 @@ import { Outlet } from 'react-router-dom'
 
 // material-ui
 import { styled, useTheme } from '@mui/material/styles'
-import { AppBar, Box, CssBaseline, Toolbar, useMediaQuery } from '@mui/material'
+import { AppBar, Box, CssBaseline, Toolbar, useMediaQuery, Alert } from '@mui/material'
 
 // project imports
 import Header from './Header'
@@ -74,6 +74,9 @@ const MainLayout = () => {
 
     return (
         <Box sx={{ display: 'flex' }}>
+            <Alert severity='info' sx={{ position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)', zIndex: 9999 }}>
+                MainLayout is rendering. Current path: {window.location.pathname}
+            </Alert>
             <CssBaseline />
             {/* header */}
             <AppBar

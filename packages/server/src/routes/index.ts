@@ -56,6 +56,10 @@ import executionsRouter from './executions'
 import validationRouter from './validation'
 import agentflowv2GeneratorRouter from './agentflowv2-generator'
 import textToSpeechRouter from './text-to-speech'
+import copilotRouter from './copilot'
+import orchestratorRouter from './orchestrator'
+import orchestratorProvidersRouter from './orchestrator/providers'
+import orchestratorConnectionsRouter from './orchestrator/connections'
 
 import authRouter from '../enterprise/routes/auth'
 import auditRouter from '../enterprise/routes/audit'
@@ -126,6 +130,10 @@ router.use('/executions', executionsRouter)
 router.use('/validation', validationRouter)
 router.use('/agentflowv2-generator', agentflowv2GeneratorRouter)
 router.use('/text-to-speech', textToSpeechRouter)
+router.use('/copilot', copilotRouter)
+router.use('/orchestrator', orchestratorRouter)
+router.use('/orchestrator', orchestratorProvidersRouter)
+router.use('/orchestrator', orchestratorConnectionsRouter)
 
 router.use('/auth', authRouter)
 router.use('/audit', IdentityManager.checkFeatureByPlan('feat:login-activity'), auditRouter)
