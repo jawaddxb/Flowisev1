@@ -68,3 +68,7 @@ export class AddCopilotTables1761040600000 implements MigrationInterface {
     }
 }
 
+
+
+
+

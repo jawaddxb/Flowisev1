@@ -71,3 +71,7 @@ Either:
 4. **Should see**: 🔧 guidance message prominently
 5. **Click**: "Fix & Test" → see 📌 step-by-step
 
+
+
+
+

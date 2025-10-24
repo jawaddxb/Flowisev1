@@ -65,7 +65,7 @@ const Executions = Loadable(lazy(() => import('@/views/agentexecutions')))
 const OrchestratorList = Loadable(lazy(() => import('@/views/orchestrator')))
 const OrchestratorCanvas = Loadable(lazy(() => import('@/views/orchestrator/Canvas')))
 const OrchestratorRunHistory = Loadable(lazy(() => import('@/views/orchestrator/RunHistory')))
-const OrchestratorDebug = Loadable(lazy(() => import('@/views/orchestrator/OrchestratorDebug')))
+const TestView = Loadable(lazy(() => import('@/views/test/Index')))
 
 // enterprise features
 const UsersPage = Loadable(lazy(() => import('@/views/users')))
@@ -367,12 +367,20 @@ const MainRoutes = {
             element: <OrchestratorList />
         },
         {
-            path: '/orchestrator/canvas/:id?',
-            element: <OrchestratorDebug />
+            path: '/test-canvas',
+            element: <TestView />
+        },
+        {
+            path: '/test-canvas/:id',
+            element: <TestView />
         },
         {
             path: '/orchestrator/runs/:id',
-            element: <OrchestratorRunHistory />
+            element: (
+                <RequireAuth permission={'chatflows:view'}>
+                    <OrchestratorRunHistory />
+                </RequireAuth>
+            )
         }
     ]
 }

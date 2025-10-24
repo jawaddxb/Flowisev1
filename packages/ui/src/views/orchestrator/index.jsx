@@ -29,11 +29,11 @@ const OrchestratorList = () => {
     }, [])
 
     const handleCreate = () => {
-        navigate('/orchestrator/canvas')
+        navigate('/test-canvas')
     }
 
     const handleEdit = (id) => {
-        navigate(`/orchestrator/canvas/${id}`)
+        navigate(`/test-canvas/${id}`)
     }
 
     const handleDuplicate = async (orchestrator) => {

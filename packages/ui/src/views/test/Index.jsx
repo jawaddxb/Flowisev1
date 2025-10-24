@@ -3,20 +3,20 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useDispatch } from 'react-redux'
 import { useTheme } from '@mui/material/styles'
 import { IconArrowLeft, IconPlus, IconPlayerPlay, IconDeviceFloppy } from '@tabler/icons-react'
+import { enqueueSnackbar as enqueueSnackbarAction } from '@/store/actions'
 import ReactFlow, { Controls, Background, useNodesState, useEdgesState, MiniMap, addEdge } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { enqueueSnackbar as enqueueSnackbarAction } from '@/store/actions'
 import useApi from '@/hooks/useApi'
 import orchestratorApi from '@/api/orchestrator'
-import AddNodePanel from './components/AddNodePanel'
-import WorkflowBrowser from './WorkflowBrowser'
-import NodeConfigDrawer from './components/NodeConfigDrawer'
-import OrchestratorNode from './components/OrchestratorNode'
+import AddNodePanel from '../../views/orchestrator/components/AddNodePanel'
+import WorkflowBrowser from '../../views/orchestrator/WorkflowBrowser'
+import NodeConfigDrawer from '../../views/orchestrator/components/NodeConfigDrawer'
+import OrchestratorNode from '../../views/orchestrator/components/OrchestratorNode'
 
 const nodeTypes = { orchestratorNode: OrchestratorNode }
 
-const OrchestratorCanvas = () => {
+const TestView = () => {
     const theme = useTheme()
     const navigate = useNavigate()
     const dispatch = useDispatch()
@@ -100,7 +100,7 @@ const OrchestratorCanvas = () => {
             } else {
                 const createResp = await createOrchestratorApi.request({ name: orchestratorName, definition: JSON.stringify(definition) })
                 enqueueSnackbar({ message: 'Orchestrator created successfully', options: { variant: 'success' } })
-                navigate(`/builder/${createResp.data.id}`)
+                navigate(`/test-canvas/${createResp.data.id}`)
             }
             setSaveDialogOpen(false)
         } catch (error) {
@@ -242,4 +242,4 @@ const OrchestratorCanvas = () => {
     )
 }
 
-export default OrchestratorCanvas
+export default TestView
