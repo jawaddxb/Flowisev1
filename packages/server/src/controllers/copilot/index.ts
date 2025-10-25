@@ -4,6 +4,7 @@ import agentflowv2Service from '../../services/agentflowv2-generator'
 import { getDataSource } from '../../DataSource'
 import { CopilotState } from '../../database/entities/CopilotState'
 import { AutoFixService } from '../../services/copilot/AutoFixService'
+import intentExtractor from '../../services/copilot/IntentExtractorService'
 import { v4 as uuidv4 } from 'uuid'
 
 const generate = async (req: Request, res: Response, next: NextFunction) => {
@@ -401,6 +402,19 @@ export const autoFix = async (req: Request, res: Response, next: NextFunction) =
         })
     } catch (err) {
         console.error('[COPILOT] Auto-fix error:', err)
+        next(err)
+    }
+}
+
+// Tier 3: LLM-based intent extraction for complex user requests
+export const interpretIntent = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { message, flowId } = req.body
+        if (!message) return res.status(400).json({ message: 'message is required' })
+        
+        const result = await intentExtractor.extractIntent(message)
+        return res.json(result)
+    } catch (err) {
         next(err)
     }
 }

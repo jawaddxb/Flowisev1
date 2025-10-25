@@ -1,8 +1,10 @@
 import PropTypes from 'prop-types'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Box, Divider, IconButton, Stack, Typography, Button, TextField, Menu, MenuItem, Chip, Alert, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { Box, Divider, IconButton, Stack, Typography, Button, TextField, Menu, MenuItem, Chip, Alert, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions, Tooltip } from '@mui/material'
 import { LoadingButton } from '@mui/lab'
-import { IconArrowsMaximize, IconHistory, IconTrash, IconSend, IconCheck, IconAlertCircle, IconPlayerPlay, IconDots } from '@tabler/icons-react'
+import { useTheme } from '@mui/material/styles'
+import { useSelector } from 'react-redux'
+import { IconArrowsMaximize, IconHistory, IconTrash, IconSend, IconCheck, IconAlertCircle, IconPlayerPlay, IconDots, IconChartDots3 } from '@tabler/icons-react'
 import useApi from '@/hooks/useApi'
 import copilotApi from '@/api/copilot'
 import QuickConfigModal from './QuickConfigModal'
@@ -10,6 +12,75 @@ import { transformIssues } from './messageTemplates'
 import ActionPill from './ActionPill'
 import PromptSuggestions from './PromptSuggestions'
 import InlineCredentialInput from './InlineCredentialInput'
+import EmailPreviewPanel from './EmailPreviewPanel'
+import WorkflowExplainerModal from './WorkflowExplainerModal'
+import WorkflowPreviewPanel from './WorkflowPreviewPanel'
+import { buildExplainerFromAnswers } from './utils/explainer'
+
+const GhostPreview = ({ answers }) => {
+    const theme = useTheme()
+    const customization = useSelector((state) => state.customization)
+    const nodes = []
+    
+    // Handle sources as array or string
+    const sources = Array.isArray(answers.sources) ? answers.sources : 
+                    answers.sources ? [answers.sources] : []
+    
+    // Add source nodes
+    if (sources.includes('Web')) nodes.push('🌐 Web Search')
+    if (sources.includes('News')) nodes.push('📰 News Search')
+    if (sources.includes('Twitter')) nodes.push('🐦 Twitter Search')
+    if (sources.includes('Reddit')) nodes.push('💬 Reddit Search')
+    if (sources.includes('YouTube')) nodes.push('🎥 YouTube Search')
+    
+    // Add research node with topic
+    if (answers.topic) nodes.push(`🔍 Research: ${answers.topic}`)
+    
+    // Add delivery node
+    if (answers.delivery === 'Email') nodes.push('📧 Email Sender')
+    if (answers.delivery === 'Slack') nodes.push('💬 Slack Message')
+    if (answers.delivery === 'Notion') nodes.push('📝 Notion Page')
+    
+    // Don't render if no meaningful answers
+    if (nodes.length === 0) return null
+    
+    return (
+        <Box sx={{ 
+            p: 2, 
+            borderRadius: `${customization.borderRadius}px`,
+            bgcolor: theme.palette.card.main,
+            border: `1px solid ${theme.palette.grey[900]}25`,
+            my: 2,
+            boxShadow: '0 2px 14px 0 rgb(32 40 45 / 8%)'
+        }}>
+            <Typography variant="caption" sx={{ 
+                fontWeight: 600, 
+                display: 'block', 
+                mb: 1.5,
+                color: 'text.secondary'
+            }}>
+                Preview
+            </Typography>
+            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                {nodes.map((n, idx) => (
+                    <Chip 
+                        key={`ghost-node-${idx}`}
+                        label={n} 
+                        size="small" 
+                        sx={{ 
+                            bgcolor: theme.palette.primary.light + '20',
+                            color: theme.palette.primary.main,
+                            border: `1px solid ${theme.palette.primary.main}40`,
+                            '&:hover': {
+                                bgcolor: theme.palette.primary.light + '30'
+                            }
+                        }} 
+                    />
+                ))}
+            </Stack>
+        </Box>
+    )
+}
 
 const Message = ({ role, content, quickFixes, prompts, showInput, onActionClick, onPromptClick, onInputSubmit, inputValue, onInputChange }) => (
     <Box sx={{ my: 1, px: 1.5 }}>
@@ -117,9 +188,15 @@ const WorkflowCopilotDock = ({ open, onToggleMax, flowId, defaultOpenGreeting = 
     const [advancedMenuAnchor, setAdvancedMenuAnchor] = useState(null)
     const [showCredentialInput, setShowCredentialInput] = useState(false)
     const [credentialToAdd, setCredentialToAdd] = useState(null)
+    const [explainerOpen, setExplainerOpen] = useState(false)
+    const [explainerDraft, setExplainerDraft] = useState(null)
+    const [lastLlmResult, setLastLlmResult] = useState(null)
+    const [savedExplainer, setSavedExplainer] = useState(null)
     const [intentInput, setIntentInput] = useState('')
     const [userIntent, setUserIntent] = useState('')
     const [isProcessing, setIsProcessing] = useState(false)
+    const [showEmailPreview, setShowEmailPreview] = useState(false)
+    const [prefilledFromIntentIds, setPrefilledFromIntentIds] = useState(new Set())
 
     useEffect(() => {
         if (!open || !flowId) return
@@ -195,7 +272,7 @@ What would you like this workflow to do? Describe it in your own words.`,
         // Debounce review calls
         const timer = setTimeout(() => {
             setMode('REVIEWING')
-            reviewApi.request({ flowId, flowData: currentFlowData })
+            reviewApi.request({ flowId })
             // Emit mode event
             window.dispatchEvent(new CustomEvent('copilot:mode', { detail: { flowId, mode: 'Review' } }))
         }, 300)
@@ -321,9 +398,333 @@ What would you like this workflow to do? Describe it in your own words.`,
         // eslint-disable-next-line
     }, [historyApi.data, mode])
 
+    // Smart pattern detection for Quick Setup (memoized to prevent React Router v6.3.0 bug)
+    const detectQuickSetupIntent = useCallback((message) => {
+        const text = message.toLowerCase()
+        
+        // Research/search keywords (more flexible matching)
+        const hasResearchAction = /(research|search|find|get|fetch|monitor|track|analyz|collect)/i.test(text)
+        const hasResearchTopic = /(news|trend|article|update|ai|tech|market|competitor)/i.test(text)
+        
+        // Delivery keywords (match plurals and variations)
+        const hasEmailDelivery = /(email|send|deliver|notify|alert|message)/i.test(text)
+        
+        // Frequency keywords
+        const hasFrequency = /(daily|weekly|every\s+day|schedule|recurring|regular)/i.test(text)
+        
+        // Combined intent: must have (research OR topic) AND email
+        const matchesResearchEmail = (hasResearchAction || hasResearchTopic) && hasEmailDelivery
+        
+        // Bonus: check for explicit "workflow" mention
+        const mentionsWorkflow = /(workflow|automation|automate|build|make|create)/i.test(text)
+        
+        console.log('[COPILOT] Pattern check:', { hasResearchAction, hasResearchTopic, hasEmailDelivery, hasFrequency, matchesResearchEmail })
+        
+        return {
+            matches: matchesResearchEmail,
+            confidence: matchesResearchEmail && (hasFrequency || mentionsWorkflow) ? 'high' : 'medium',
+            suggestedIntent: hasFrequency ? 'daily research email' : 'research email'
+        }
+    }, [])
+    
+    // Parse natural language to extract workflow parameters (memoized to prevent React Router v6.3.0 bug)
+    const parseNaturalIntent = useCallback((message) => {
+        const text = message.toLowerCase()
+        const answers = {}
+        
+        // Extract delivery method
+        if (/\b(email|send|deliver)\b.*\b(me|to me)\b/i.test(text) || /\b(email|send)\b/i.test(text)) {
+            answers.delivery = 'Email'
+        } else if (/\bslack\b/i.test(text)) {
+            answers.delivery = 'Slack'
+        } else if (/\bnotion\b/i.test(text)) {
+            answers.delivery = 'Notion'
+        }
+        
+        // Extract frequency/timeframe
+        if (/\bdaily\b/.test(text)) {
+            answers.timeframe = 'Today'
+            answers.schedule = 'Daily'
+        } else if (/\bweekly\b/.test(text)) {
+            answers.timeframe = 'Last 7 days'
+            answers.schedule = 'Weekly'
+        } else {
+            answers.timeframe = 'Today'
+            answers.schedule = 'Run now'
+        }
+        
+        // Extract topic (the core subject) - IMPROVED LOGIC
+        let topic = message
+        
+        // Pattern 1: "Send me [delivery] [frequency] of/about X" → extract X
+        const sendMePattern = /(?:send|email|give|get)\s+(?:me\s+)?(?:an?\s+)?(?:email|message|report|summary)?\s*(?:daily|weekly)?\s*(?:of|about|on|regarding|for)?\s+(?:the\s+)?(.+?)(?:\s+(?:daily|weekly|each day|every day))?$/i
+        let match = topic.match(sendMePattern)
+        if (match && match[1]) {
+            topic = match[1].trim()
+        } else {
+            // Pattern 2: "X and send/email me" → extract X before delivery keywords
+            const beforeDeliveryPattern = /^(.+?)\s+(?:and\s+)?(?:email|send|deliver|notify)(?:\s+(?:me|it|that|them))?/i
+            match = topic.match(beforeDeliveryPattern)
+            if (match && match[1]) {
+                topic = match[1].trim()
+            } else {
+                // Pattern 3: Remove command prefixes and get remainder
+                topic = topic.replace(/^(make|build|create|give|can you|please|i want|i need|help me)\s+(?:me\s+)?(?:a\s+)?(?:workflow|automation)?\s*(?:that|which|to)?\s*/i, '')
+                topic = topic.replace(/(?:and\s+)?(?:email|send|deliver)\s+(?:me|it).*$/i, '')
+                topic = topic.replace(/\s+(?:daily|weekly)$/i, '')
+            }
+        }
+        
+        // Clean up prefixes that might remain
+        topic = topic.replace(/^(?:the\s+)?(?:latest|recent|new|current)\s+/i, 'latest ')
+        topic = topic.replace(/^(?:about|on|regarding|for)\s+/i, '')
+        topic = topic.replace(/^(?:get|find|fetch|monitor|track|search|research|analyze)\s+(?:me\s+)?/i, '')
+        
+        // Remove schedule words from end (they're already extracted)
+        topic = topic.replace(/\s+(?:daily|weekly|each day|every day)$/i, '')
+        topic = topic.trim()
+        
+        // Only set topic if we extracted something meaningful (not just delivery/schedule words)
+        // Don't reject if schedule words appeared in topic (we cleaned them above)
+        if (topic && topic.length > 3 && !/(^|\s)(email|send|deliver|me)(\s|$)/i.test(topic)) {
+            answers.topic = topic
+        }
+        
+        // Default sources to Web
+        answers.sources = ['Web']
+        
+        // Check for specific sources mentioned
+        if (/\bnews\b/i.test(text)) {
+            answers.sources.push('News')
+        }
+        if (/\btwitter\b/i.test(text)) {
+            answers.sources.push('Twitter')
+        }
+        if (/\breddit\b/i.test(text)) {
+            answers.sources.push('Reddit')
+        }
+        if (/\byoutube\b/i.test(text)) {
+            answers.sources.push('YouTube')
+        }
+        
+        // Remove duplicates
+        answers.sources = [...new Set(answers.sources)]
+        
+        return answers
+    }, [])
+
+    // Explainer modal handlers
+    const openExplainer = useCallback(() => {
+        const draft = buildExplainerFromAnswers(answers, lastLlmResult)
+        setExplainerDraft(draft)
+        setExplainerOpen(true)
+    }, [answers, lastLlmResult])
+
+    const saveExplainer = useCallback(() => {
+        if (!explainerDraft || !currentFlowData || !onFlowUpdate) {
+            setToast({ open: true, message: 'Unable to save explainer', severity: 'error' })
+            return
+        }
+
+        try {
+            // Attach explainer to flowData metadata
+            const updatedFlowData = {
+                ...currentFlowData,
+                metadata: {
+                    ...(currentFlowData.metadata || {}),
+                    copilotExplainer: explainerDraft
+                }
+            }
+
+            // Call parent's update handler
+            onFlowUpdate(updatedFlowData)
+            
+            // Update local saved explainer state
+            setSavedExplainer(explainerDraft)
+            
+            setToast({ open: true, message: 'Workflow diagram saved!', severity: 'success' })
+            setExplainerOpen(false)
+        } catch (err) {
+            console.error('Failed to save explainer:', err)
+            setToast({ open: true, message: 'Failed to save diagram', severity: 'error' })
+        }
+    }, [explainerDraft, currentFlowData, onFlowUpdate])
+
+    const viewSavedExplainer = useCallback(() => {
+        if (savedExplainer) {
+            setExplainerDraft(savedExplainer)
+            setExplainerOpen(true)
+        }
+    }, [savedExplainer])
+
+    // Load saved explainer from currentFlowData when available
+    useEffect(() => {
+        if (currentFlowData?.metadata?.copilotExplainer) {
+            setSavedExplainer(currentFlowData.metadata.copilotExplainer)
+        }
+    }, [currentFlowData])
+
     const send = async (text) => {
         const content = (text ?? input).trim()
         if (!content) return
+        
+        // Check if this is an empty canvas (no nodes yet)
+        const hasNodes = currentFlowData?.nodes?.length > 0
+        
+        // Debug logging
+        console.log('[COPILOT] Send triggered:', { 
+            content, 
+            hasNodes, 
+            messagesLength: messages.length,
+            mode,
+            willCheckPattern: (!hasNodes || mode === 'DISCOVERY') && messages.length <= 1 
+        })
+        
+        // Detect Quick Setup intent on first message (empty canvas OR discovery mode for templates)
+        if ((!hasNodes || mode === 'DISCOVERY') && messages.length <= 1) {
+            const intentMatch = detectQuickSetupIntent(content)
+            console.log('[COPILOT] Pattern detection result:', intentMatch)
+            
+            if (intentMatch.matches) {
+                // TIER 1: Clear regex match
+                const parsedAnswers = parseNaturalIntent(content)
+                console.log('[COPILOT] Tier 1 - Regex parsed:', parsedAnswers)
+                
+                // Build a friendly summary of what we understood
+                const summary = []
+                if (parsedAnswers.topic) summary.push(`Topic: ${parsedAnswers.topic}`)
+                if (parsedAnswers.delivery) summary.push(`Delivery: ${parsedAnswers.delivery}`)
+                if (parsedAnswers.schedule && parsedAnswers.schedule !== 'Run now') summary.push(`Schedule: ${parsedAnswers.schedule}`)
+                
+                const summaryText = summary.length > 0 
+                    ? `\n\nI understood:\n${summary.map(s => `• ${s}`).join('\n')}`
+                    : ''
+                
+                // Parse-only: Pre-fill answers and show pills (no auto-build)
+                setAnswers(parsedAnswers)
+                // Track which fields were pre-filled from intent
+                setPrefilledFromIntentIds(new Set(Object.keys(parsedAnswers)))
+                setMessages(prev => [...prev, 
+                    { role: 'user', content },
+                    { role: 'assistant', content: `Got it! I'll pre-fill some options below.${summaryText}\n\nAdjust anything you'd like, then click "Complete" when ready.` }
+                ])
+                setMode('BUILDING')
+                setInput('')
+                
+                try {
+                    // Save parsed answers and get schema/questions
+                    const resp = await copilotApi.chat({ 
+                        message: content, 
+                        flowId, 
+                        context: { answers: parsedAnswers } 
+                    })
+                    const { assistantMessage, questionSchema = [], nextQuestions: qs = [], requiredFields = [], missingFields = [], status, suggestions: sugg = [], planSummary: ps, answers: merged = {}, answeredCount: ac = 0, totalRequired: tr = 0, planType: pt = '' } = resp.data || {}
+                    
+                    setSchema(questionSchema)
+                    setRequired(requiredFields)
+                    setMissing(missingFields)
+                    setRunnable(status === 'runnable')
+                    setAnswers(merged)
+                    setPlanSummary(ps || '')
+                    setAnsweredCount(ac)
+                    setTotalRequired(tr)
+                    setPlanType(pt)
+                    if (Array.isArray(sugg) && sugg.length) setSuggestions(sugg)
+                    setNextQuestions(qs)
+                } catch (err) {
+                    console.error('Intent parsing error:', err)
+                }
+                return // Exit early - don't run normal chat flow
+            } else {
+                // TIER 3: LLM fallback for complex intents
+                console.log('[COPILOT] Tier 1 failed, trying Tier 3 (LLM)...')
+                
+                try {
+                    const response = await copilotApi.interpretIntent({ 
+                        message: content, 
+                        flowId 
+                    })
+                    
+                    // Extract actual data from axios response
+                    const llmResult = response.data
+                    setLastLlmResult(llmResult) // Save for explainer generation
+                    
+                    console.log('[COPILOT] Tier 3 - LLM result:', llmResult)
+                    console.log('[COPILOT] Tier 3 - Confidence:', llmResult.confidence, 'Extracted:', llmResult.extracted)
+                    
+                    // Check if LLM successfully extracted meaningful information
+                    const hasExtracted = llmResult.extracted && Object.keys(llmResult.extracted).some(k => llmResult.extracted[k])
+                    
+                    if (llmResult.confidence !== 'low' && hasExtracted) {
+                        // LLM successfully extracted intent
+                        const extractedAnswers = { ...llmResult.extracted }
+                        
+                        // Normalize extracted values to match our schema
+                        if (extractedAnswers.frequency && !extractedAnswers.schedule) {
+                            extractedAnswers.schedule = extractedAnswers.frequency
+                        }
+                        
+                        setAnswers(extractedAnswers)
+                        setPrefilledFromIntentIds(new Set(Object.keys(extractedAnswers).filter(k => extractedAnswers[k])))
+                        
+                        const clarifyText = llmResult.clarifications_needed && llmResult.clarifications_needed.length > 0 
+                            ? '\n\n' + llmResult.clarifications_needed.map(q => `❓ ${q}`).join('\n')
+                            : ''
+                        
+                        // Map workflow types to user-friendly descriptions
+                        const workflowTypeLabels = {
+                            'research_and_notify': 'research topics and send notifications',
+                            'chatflow': 'build a chatbot',
+                            'rag': 'build a knowledge base (RAG)',
+                            'unknown': 'build a custom workflow'
+                        }
+                        
+                        const workflowTypeLabel = workflowTypeLabels[llmResult.workflow_type] || 
+                                                 llmResult.workflow_type.replace(/_/g, ' ')
+                        
+                        setMessages(prev => [...prev, 
+                            { role: 'user', content },
+                            { role: 'assistant', content: `I understand you want to ${workflowTypeLabel}!${clarifyText}\n\nI've pre-filled what I understood below. Adjust anything as needed.` }
+                        ])
+                        setMode('BUILDING')
+                        setInput('')
+                        
+                        // Get schema and update state from server
+                        try {
+                            const resp = await copilotApi.chat({ 
+                                message: content, 
+                                flowId, 
+                                context: { answers: extractedAnswers } 
+                            })
+                            const { questionSchema = [], nextQuestions: qs = [], requiredFields = [], missingFields = [], status, suggestions: sugg = [], planSummary: ps, answers: merged = {}, answeredCount: ac = 0, totalRequired: tr = 0, planType: pt = '' } = resp.data || {}
+                            
+                            setSchema(questionSchema)
+                            setRequired(requiredFields)
+                            setMissing(missingFields)
+                            setRunnable(status === 'runnable')
+                            setAnswers(merged)
+                            setPlanSummary(ps || '')
+                            setAnsweredCount(ac)
+                            setTotalRequired(tr)
+                            setPlanType(pt)
+                            if (Array.isArray(sugg) && sugg.length) setSuggestions(sugg)
+                            setNextQuestions(qs)
+                        } catch (err) {
+                            console.error('Schema fetch error:', err)
+                        }
+                        
+                        return // Exit early - LLM successfully handled this
+                    }
+                    
+                    console.log('[COPILOT] Tier 3 returned low confidence or no extraction, falling back to normal chat')
+                } catch (err) {
+                    console.log('[COPILOT] Tier 3 failed, using normal chat:', err)
+                }
+                // Fall through to normal chat if LLM fails or returns low confidence
+            }
+        }
+        
+        // Normal chat flow for non-Quick-Setup messages
         setMessages((prev) => prev.concat({ role: 'user', content }))
         setInput('')
         // Switch to building mode
@@ -811,9 +1212,7 @@ What would you like this workflow to do? Describe it in your own words.`,
                     setMessages(prev => [...prev, { role: 'assistant', content: `I set up the structure. Let me check what else is needed...` }])
                     setMode('REVIEW')
                     setTimeout(() => {
-                        if (currentFlowData) {
-                            reviewApi.request({ flowId, flowData: currentFlowData })
-                        }
+                        reviewApi.request({ flowId })
                     }, 500)
                 }
                 break
@@ -850,17 +1249,47 @@ What would you like this workflow to do? Describe it in your own words.`,
     
     // Handle saving credential from inline input
     const handleSaveCredential = async ({ credentialName, apiKey }) => {
-        // TODO: Implement credential saving via API
-        // For now, just show success message
-        setShowCredentialInput(false)
-        setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: `✅ API key saved! Your ${credentialName} credential is now configured. Let me check the workflow again...`
-        }])
-        // Trigger re-review
-        setTimeout(() => {
-            reviewApi.request({ flowId, flowData: currentFlowData })
-        }, 500)
+        try {
+            const client = (await import('@/api/client')).default
+            
+            // Map credential name to the correct field name
+            const credentialFieldMap = {
+                'openRouterApi': 'openRouterApiKey',
+                'braveSearchApi': 'braveApiKey',
+                'serperApi': 'serperApiKey',
+                'serpApi': 'serpApiKey',
+                'openAI': 'openAIApiKey',
+                'anthropicApi': 'anthropicApiKey'
+            }
+            
+            const fieldName = credentialFieldMap[credentialName] || `${credentialName}Key`
+            
+            const payload = { 
+                name: `${credentialName} (Personal)`, 
+                credentialName, 
+                plainDataObj: { 
+                    [fieldName]: apiKey 
+                } 
+            }
+            
+            await client.post('/credentials', payload)
+            setShowCredentialInput(false)
+            setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: `✅ API key saved! Your ${credentialName} is now configured. Let me check the workflow again...`
+            }])
+            
+            // Trigger re-review (use flowId only to avoid stale data)
+            setTimeout(() => {
+                reviewApi.request({ flowId })
+            }, 500)
+        } catch (err) {
+            console.error('Failed to save credential:', err)
+            setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: `❌ Failed to save ${credentialName}. Please try Settings → Credentials or check your connection.`
+            }])
+        }
     }
     
     // Handle prompt suggestion clicks
@@ -909,6 +1338,14 @@ What would you like this workflow to do? Describe it in your own words.`,
         await send(prompt)
     }
 
+    // Detect if current input matches Quick Setup pattern (memoized for performance)
+    const inputMatchesQuickSetup = useMemo(() => {
+        if (!input || input.length < 20) return false
+        if (currentFlowData?.nodes?.length > 0) return false
+        if (messages.length > 1) return false
+        return detectQuickSetupIntent(input).matches
+    }, [input, currentFlowData, messages.length])
+    
     // Summary ribbon content
     const summaryContent = useMemo(() => {
         // Don't show summary ribbon in DISCOVERY mode
@@ -918,16 +1355,36 @@ What would you like this workflow to do? Describe it in your own words.`,
         
         if (applied) {
             return { 
-                text: `✓ Workflow applied: ${planSummary || 'Changes saved'}`, 
+                text: `✅ Workflow applied successfully! Ready to test.`, 
                 bgcolor: '#d4edda', 
                 textColor: '#155724',
                 icon: <IconCheck size={14} /> 
             }
         }
+        if (mode === 'REVIEWING' && reviewData?.runnable) {
+            return { 
+                text: `✅ Ready to test • All configured`, 
+                bgcolor: '#d4edda', 
+                textColor: '#155724',
+                icon: <IconCheck size={14} /> 
+            }
+        }
+        if (mode === 'REVIEWING' && !reviewData?.runnable) {
+            const credCount = reviewData?.missingCredentials?.length || 0
+            const paramCount = reviewData?.missingParams?.length || 0
+            const issueCount = reviewData?.issues?.length || 0
+            const total = credCount + paramCount + issueCount
+            return { 
+                text: `⚙️ ${total} item${total !== 1 ? 's' : ''} to configure`, 
+                bgcolor: '#fef3c7', 
+                textColor: '#78350f',
+                icon: <IconAlertCircle size={14} /> 
+            }
+        }
         if (runnable && planSummary) {
             const src = Array.isArray(answers.sources) ? answers.sources.join(' + ') : answers.sources || 'sources'
             const topic = answers.topic || answers.goal || 'your topic'
-            const friendly = `Ready: Search ${src} for "${topic}" and deliver results`
+            const friendly = `✅ Ready: ${src} → "${topic}"`
             return { 
                 text: friendly, 
                 bgcolor: '#d4edda', 
@@ -935,17 +1392,29 @@ What would you like this workflow to do? Describe it in your own words.`,
                 icon: <IconCheck size={14} /> 
             }
         }
-        if (totalRequired > 0) {
-            const prettyMissing = missing.map((m) => m[0].toUpperCase() + m.slice(1)).join(', ')
+        if (totalRequired > 0 && mode === 'BUILDING') {
             return { 
-                text: `Draft: missing ${prettyMissing} (${answeredCount}/${totalRequired})`, 
-                bgcolor: '#fef3c7', 
-                textColor: '#78350f',
+                text: `📝 In progress: ${answeredCount}/${totalRequired} answered`, 
+                bgcolor: '#e3f2fd', 
+                textColor: '#1565c0',
                 icon: <IconAlertCircle size={14} /> 
             }
         }
         return null
-    }, [applied, runnable, planSummary, answers, missing, answeredCount, totalRequired, mode])
+    }, [applied, runnable, planSummary, answers, answeredCount, totalRequired, mode, reviewData])
+
+    // Compute if workflow can be completed (all required fields filled)
+    const canComplete = useMemo(() => {
+        if (mode !== 'BUILDING') return false
+        return required.every(r => {
+            const val = answers[r]
+            return val && (!Array.isArray(val) || val.length > 0)
+        })
+    }, [mode, required, answers])
+
+    const hasExplainableContent = useMemo(() => {
+        return Boolean(answers.topic || answers.delivery || (answers.sources && answers.sources.length > 0))
+    }, [answers])
 
     // Avoid conditional early return to keep hooks order consistent; hide via CSS instead
 
@@ -1045,15 +1514,50 @@ What would you like this workflow to do? Describe it in your own words.`,
     }, [mode, runnable, flowId, answers, planType, applyApi, planSummary, onFlowUpdate, setMode, setMessages, setApplied, setConfigGaps, setShowConfigModal, setToast, setShowUndo, setUndoTimer, isLoading, reviewData])
 
     return (
-        <Box sx={{ position: 'absolute', top: 70, right: 0, bottom: 0, width, bgcolor: 'background.paper', borderLeft: '1px solid rgba(0,0,0,0.08)', display: open ? 'flex' : 'none', flexDirection: 'column', zIndex: 1200 }}>
+        <>
+            <WorkflowPreviewPanel 
+                answers={answers} 
+                visible={mode === 'BUILDING' && hasExplainableContent && open}
+                dockWidth={width}
+            />
+            <Box sx={{ position: 'absolute', top: 70, right: 0, bottom: 0, width, bgcolor: 'background.paper', borderLeft: '1px solid rgba(0,0,0,0.08)', display: open ? 'flex' : 'none', flexDirection: 'column', zIndex: 1200 }}>
             <Stack direction='row' alignItems='center' sx={{ px: 1, py: 0.5 }} spacing={1}>
                 <Typography variant='subtitle2' sx={{ flex: 1 }}>{headerTitle}</Typography>
                 {configGaps.length > 0 && <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'error.main' }} />}
+                {savedExplainer && (
+                    <Tooltip title="View Workflow Diagram">
+                        <IconButton size='small' onClick={viewSavedExplainer}>
+                            <IconChartDots3 size={16} />
+                        </IconButton>
+                    </Tooltip>
+                )}
                 <IconButton size='small' onClick={(e) => setAnchorEl(e.currentTarget)}><IconHistory size={16} /></IconButton>
                 <IconButton size='small' onClick={onToggleMax}><IconArrowsMaximize size={16} /></IconButton>
                 <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
                     <MenuItem disabled>Conversation History</MenuItem>
-                    <MenuItem onClick={() => clearApi.request(flowId)}><IconTrash size={14} style={{ marginRight: 6 }} /> Clear</MenuItem>
+                    <MenuItem onClick={() => {
+                        clearApi.request(flowId)
+                        setAnchorEl(null) // Close the menu first
+                        // Reset all conversation state
+                        setTimeout(() => {
+                            setMessages([])
+                            setAnswers({})
+                            setPlanType('')
+                            setPlanSummary('')
+                            setRunnable(false)
+                            setRequired([])
+                            setMissing([])
+                            setSchema([])
+                            setNextQuestions([])
+                            setApplied(false)
+                            setShowUndo(false)
+                            setReviewData(null)
+                            setConfigGaps([])
+                            setIntentInput('')
+                            setUserIntent('')
+                            setMode('BUILDING') // Reset to building mode for empty canvas
+                        }, 100)
+                    }}><IconTrash size={14} style={{ marginRight: 6 }} /> Clear</MenuItem>
                 </Menu>
             </Stack>
             <Divider />
@@ -1064,31 +1568,61 @@ What would you like this workflow to do? Describe it in your own words.`,
                 </Box>
             )}
             <Box sx={{ flex: 1, overflow: 'auto', p: 1 }}>
+                {/* Simple greeting for empty canvas */}
+                {messages.length === 0 && currentFlowData?.nodes?.length === 0 && (
+                    <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
+                        Describe what you want to build and I'll help you set it up quickly.
+                    </Typography>
+                )}
+                
                 {mode === 'REVIEWING' && reviewData && (
                     <Box sx={{ mb: 2 }}>
                         <Box sx={{ p: 1.5, bgcolor: reviewData.runnable ? '#d4edda' : '#fef3c7', borderRadius: 1, mb: 2 }}>
                             <Typography variant='subtitle2' sx={{ fontWeight: 600, mb: 0.5, color: reviewData.runnable ? '#155724' : '#78350f' }}>
-                                {reviewData.runnable ? '✓ Flow is ready' : '⚠ Flow needs attention'}
+                                {reviewData.runnable ? '✅ Ready to test!' : '⚙️ Almost there...'}
                             </Typography>
                             <Typography variant='body2' sx={{ mb: 1, color: reviewData.runnable ? '#155724' : '#78350f' }}>
-                                {reviewData.summary}
+                                {reviewData.runnable 
+                                    ? 'Your workflow is configured and ready to run. Click "Test it now" to see it in action.'
+                                    : 'Just a few quick items to finish:'}
                             </Typography>
                             {!reviewData.runnable && (
-                                <Box sx={{ mt: 1 }}>
+                                <Box sx={{ mt: 1.5 }}>
                                     {(reviewData.missingCredentials || []).length > 0 && (
-                                        <Typography variant='caption' sx={{ display: 'block', color: '#78350f' }}>
-                                            Missing credentials: {(reviewData.missingCredentials || []).map(c => c.label).join(', ')}
-                                        </Typography>
+                                        <Box sx={{ mb: 1 }}>
+                                            <Typography variant='caption' sx={{ display: 'block', color: '#78350f', fontWeight: 600, mb: 0.5 }}>
+                                                🔑 Connect your accounts:
+                                            </Typography>
+                                            {(reviewData.missingCredentials || []).map((c, idx) => (
+                                                <Typography key={idx} variant='caption' sx={{ display: 'block', color: '#78350f', ml: 2 }}>
+                                                    • {c.label} {c.isPersonal === false && '(using workspace credentials)'}
+                                                </Typography>
+                                            ))}
+                                        </Box>
                                     )}
                                     {(reviewData.missingParams || []).length > 0 && (
-                                        <Typography variant='caption' sx={{ display: 'block', color: '#78350f' }}>
-                                            Missing parameters: {(reviewData.missingParams || []).map(p => p.paramLabel).join(', ')}
-                                        </Typography>
+                                        <Box sx={{ mb: 1 }}>
+                                            <Typography variant='caption' sx={{ display: 'block', color: '#78350f', fontWeight: 600, mb: 0.5 }}>
+                                                ⚙️ Configure settings:
+                                            </Typography>
+                                            {(reviewData.missingParams || []).slice(0, 3).map((p, idx) => (
+                                                <Typography key={idx} variant='caption' sx={{ display: 'block', color: '#78350f', ml: 2 }}>
+                                                    • {p.paramLabel}
+                                                </Typography>
+                                            ))}
+                                        </Box>
                                     )}
                                     {(reviewData.issues || []).length > 0 && (
-                                        <Typography variant='caption' sx={{ display: 'block', color: '#78350f' }}>
-                                            Issues: {(reviewData.issues || []).slice(0, 2).join('; ')}
-                                        </Typography>
+                                        <Box>
+                                            <Typography variant='caption' sx={{ display: 'block', color: '#78350f', fontWeight: 600, mb: 0.5 }}>
+                                                🔧 Fix issues:
+                                            </Typography>
+                                            {(reviewData.issues || []).slice(0, 2).map((issue, idx) => (
+                                                <Typography key={idx} variant='caption' sx={{ display: 'block', color: '#78350f', ml: 2 }}>
+                                                    • {issue}
+                                                </Typography>
+                                            ))}
+                                        </Box>
                                     )}
                                 </Box>
                             )}
@@ -1202,18 +1736,23 @@ What would you like this workflow to do? Describe it in your own words.`,
                         <Button
                             variant="contained"
                             fullWidth
-                            onClick={() => {
-                                setMessages(prev => [...prev, { role: 'assistant', content: 'Checking final requirements...' }])
-                                setMode('REVIEW')
-                                setTimeout(() => {
-                                    reviewApi.request({ flowId, flowData: currentFlowData })
-                                }, 300)
-                            }}
+                                onClick={() => {
+                                    setMessages(prev => [...prev, { role: 'assistant', content: 'Checking final requirements...' }])
+                                    setMode('REVIEW')
+                                    setTimeout(() => {
+                                        reviewApi.request({ flowId })
+                                    }, 300)
+                                }}
                             sx={{ mt: 1 }}
                         >
                             Continue to review →
                         </Button>
                     </Box>
+                )}
+                
+                {/* Ghost Preview - show draft workflow based on answers */}
+                {mode === 'BUILDING' && (answers.topic || answers.sources || answers.delivery) && (
+                    <GhostPreview answers={answers} />
                 )}
                 
                 {/* Inline credential input (from old flow) */}
@@ -1230,26 +1769,59 @@ What would you like this workflow to do? Describe it in your own words.`,
                 )}
                 {displayQuestions.length > 0 && mode !== 'DISCOVERY' && mode !== 'CONFIGURE' && (
                     <Stack spacing={1} sx={{ p: 1 }}>
-                        {displayQuestions.map((q) => (
-                            <Box key={q.id}>
-                                <Typography variant='caption' color='text.secondary'>{q.text}</Typography>
-                                {Array.isArray(q.options) && q.options.length > 0 ? (
-                                    <Stack direction='row' spacing={1} sx={{ flexWrap: 'wrap', gap: 0.75, mt: 0.5 }}>
-                                        {q.options.map((opt) => {
-                                            const isSelected = Array.isArray(answers[q.id]) ? answers[q.id].includes(opt) : answers[q.id] === opt
-                                            const isMulti = Boolean(q.multi)
-                                            return (
-                                                <Chip
-                                                    key={opt}
-                                                    size='small'
-                                                    variant={isSelected ? 'filled' : 'outlined'}
-                                                    color={isSelected ? 'primary' : 'default'}
-                                                    label={opt}
-                                                    onClick={() => setAnswer(q.id, opt, true, isMulti)}
-                                                    sx={{ mb: 0.5 }}
-                                                />
-                                            )
-                                        })}
+                        {displayQuestions.map((q) => {
+                            const isPreFilled = prefilledFromIntentIds.has(q.id)
+                            
+                            // Tooltips for Sources options
+                            const sourceTooltips = {
+                                'Web': 'General search engines (Google, Bing, etc.)',
+                                'News': 'News-specific sites and aggregators',
+                                'Twitter': 'Social media posts and trends',
+                                'Reddit': 'Community discussions and forums',
+                                'YouTube': 'Video content and transcripts'
+                            }
+                            
+                            return (
+                                <Box key={q.id}>
+                                    <Typography variant='caption' color='text.secondary'>
+                                        {q.text}
+                                        {isPreFilled && (
+                                            <Chip 
+                                                label="Pre-filled" 
+                                                size="small" 
+                                                color="success" 
+                                                sx={{ ml: 0.5, height: 16, fontSize: '0.65rem' }} 
+                                            />
+                                        )}
+                                    </Typography>
+                                    {Array.isArray(q.options) && q.options.length > 0 ? (
+                                        <Stack direction='row' spacing={1} sx={{ flexWrap: 'wrap', gap: 0.75, mt: 0.5 }}>
+                                            {q.options.map((opt) => {
+                                                const isSelected = Array.isArray(answers[q.id]) ? answers[q.id].includes(opt) : answers[q.id] === opt
+                                                const isMulti = Boolean(q.multi)
+                                                const chip = (
+                                                    <Chip
+                                                        key={opt}
+                                                        size='small'
+                                                        variant={isSelected ? 'filled' : 'outlined'}
+                                                        color={isPreFilled && isSelected ? 'success' : isSelected ? 'primary' : 'default'}
+                                                        label={opt}
+                                                        onClick={() => setAnswer(q.id, opt, true, isMulti)}
+                                                        sx={{ mb: 0.5 }}
+                                                    />
+                                                )
+                                                
+                                                // Add tooltip for Sources options
+                                                if (q.id === 'sources' && sourceTooltips[opt]) {
+                                                    return (
+                                                        <Tooltip key={opt} title={sourceTooltips[opt]} arrow>
+                                                            {chip}
+                                                        </Tooltip>
+                                                    )
+                                                }
+                                                
+                                                return chip
+                                            })}
                                         {Boolean(q.multi) && (
                                             <Chip
                                                 key={`${q.id}-clear`}
@@ -1260,16 +1832,17 @@ What would you like this workflow to do? Describe it in your own words.`,
                                                 onClick={() => setAnswer(q.id, [], false, true)}
                                                 sx={{ mb: 0.5 }}
                                             />
-                                        )}
-                                    </Stack>
-                                ) : (
-                                    <Stack direction='row' spacing={1} sx={{ mt: 0.5 }}>
-                                        <TextField size='small' placeholder='Type answer…' value={freeform[q.id] || ''} onChange={(e) => setFreeform({ ...freeform, [q.id]: e.target.value })} fullWidth />
-                                        <Button variant='outlined' size='small' onClick={() => { if ((freeform[q.id] || '').trim()) setAnswer(q.id, freeform[q.id].trim()) }}>Set</Button>
-                                    </Stack>
-                                )}
-                            </Box>
-                        ))}
+                                            )}
+                                        </Stack>
+                                    ) : (
+                                        <Stack direction='row' spacing={1} sx={{ mt: 0.5 }}>
+                                            <TextField size='small' placeholder='Type answer…' value={freeform[q.id] || ''} onChange={(e) => setFreeform({ ...freeform, [q.id]: e.target.value })} fullWidth />
+                                            <Button variant='outlined' size='small' onClick={() => { if ((freeform[q.id] || '').trim()) setAnswer(q.id, freeform[q.id].trim()) }}>Set</Button>
+                                        </Stack>
+                                    )}
+                                </Box>
+                            )
+                        })}
                     </Stack>
                 )}
                 {runnable && planSummary && (
@@ -1295,8 +1868,65 @@ What would you like this workflow to do? Describe it in your own words.`,
                                 Update
                             </Button>
                         </Stack>
+                        
+                        {/* Email preview toggle for email delivery */}
+                        {answers.delivery === 'Email' && !showEmailPreview && (
+                            <Button 
+                                size='small' 
+                                variant='outlined'
+                                fullWidth
+                                onClick={() => setShowEmailPreview(true)}
+                                sx={{ mt: 2, textTransform: 'none' }}
+                            >
+                                Preview Email
+                            </Button>
+                        )}
                     </Box>
                 )}
+                
+                {/* Email Preview Panel */}
+                {showEmailPreview && answers.delivery === 'Email' && (
+                    <EmailPreviewPanel 
+                        summary={planSummary}
+                        answers={answers}
+                        onClose={() => setShowEmailPreview(false)}
+                    />
+                )}
+                
+                {/* Preview Diagram Button */}
+                {hasExplainableContent && mode === 'BUILDING' && (
+                    <Box sx={{ p: 1, pt: 2 }}>
+                        <Button
+                            variant="outlined"
+                            color="primary"
+                            size="medium"
+                            fullWidth
+                            onClick={openExplainer}
+                            sx={{ mb: 1 }}
+                        >
+                            📊 Preview Workflow Diagram
+                        </Button>
+                    </Box>
+                )}
+
+                {/* Prominent Complete Button when ready */}
+                {canComplete && mode === 'BUILDING' && (
+                    <Box sx={{ p: 1 }}>
+                        <LoadingButton
+                            variant="contained"
+                            color="success"
+                            size="large"
+                            fullWidth
+                            onClick={handleComplete}
+                            loading={applyApi.loading}
+                            startIcon={<IconCheck size={16} />}
+                            sx={{ my: 2 }}
+                        >
+                            ✓ Complete & Build Workflow
+                        </LoadingButton>
+                    </Box>
+                )}
+                
                 {mode === 'BUILDING' && messages.length <= 1 && suggestions.length > 0 && (
                     <Stack direction='row' spacing={1} sx={{ flexWrap: 'wrap', p: 1, gap: 0.75 }}>
                         {suggestions.map((s) => (
@@ -1329,7 +1959,19 @@ What would you like this workflow to do? Describe it in your own words.`,
             </Box>
             <Divider />
             <Stack direction='row' spacing={1} sx={{ p: 1 }}>
-                <TextField size='small' fullWidth placeholder='Describe what you want to build...' value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }} />
+                <TextField 
+                    size='small' 
+                    fullWidth 
+                    placeholder='Describe what you want to build...' 
+                    value={input} 
+                    onChange={(e) => setInput(e.target.value)} 
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+                    helperText={
+                        inputMatchesQuickSetup
+                            ? '💡 Tip: I can auto-build this workflow for you'
+                            : undefined
+                    }
+                />
                 <Button variant='contained' onClick={() => send()}><IconSend size={16} /></Button>
             </Stack>
             <Snackbar open={toast.open} autoHideDuration={4000} onClose={() => setToast({ ...toast, open: false })}>
@@ -1366,7 +2008,16 @@ What would you like this workflow to do? Describe it in your own words.`,
                     </Button>
                 </DialogActions>
             </Dialog>
-        </Box>
+
+            {/* Workflow Explainer Modal */}
+            <WorkflowExplainerModal
+                open={explainerOpen}
+                onClose={() => setExplainerOpen(false)}
+                explainer={explainerDraft}
+                onSave={saveExplainer}
+            />
+            </Box>
+        </>
     )
 }
 

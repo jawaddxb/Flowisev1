@@ -33,7 +33,8 @@ export function getCorsOptions(): any {
             } else {
                 callback(null, false)
             }
-        }
+        },
+        credentials: true // Allow credentials (cookies, authorization headers) for dev server on port 8080
     }
     return corsOptions
 }

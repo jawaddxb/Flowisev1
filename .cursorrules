@@ -1,0 +1,263 @@
+# Flowise Development Rules
+
+## Build & Dev Process
+
+### UI Changes (React/Vite)
+**Location:** `packages/ui/src/`
+
+**After modifying UI files, you MUST:**
+1. Clean build cache: `rm -rf packages/ui/build packages/ui/node_modules/.vite`
+2. Rebuild: `cd packages/ui && npm run build`
+3. Restart server OR use the running server (it auto-serves new build)
+4. Hard refresh browser: `Cmd + Shift + R` (Mac) or `Ctrl + Shift + R` (Windows/Linux)
+5. Try incognito mode if caching persists
+
+**Common Issues:**
+- Browser cache: Always hard refresh after rebuild
+- Vite cache: Delete `.vite` folder if build seems stale
+- Old bundle refs: Clean build directory completely if index.html has wrong hashes
+- Service worker: Check DevTools → Application → Service Workers and unregister if present
+
+### Server Changes (TypeScript/Node)
+**Location:** `packages/server/src/`
+
+**After modifying server files:**
+- If using `pnpm start`: Restart server manually
+- If using `pnpm dev`: Nodemon auto-restarts on save
+- Check terminal for compilation errors
+
+### Component Changes (Shared)
+**Location:** `packages/components/`
+
+**After modifying components:**
+- Rebuild components: `cd packages/components && npm run build`
+- Rebuild UI if components are used there
+- Restart server to load new component definitions
+
+## Ports
+- **Development UI (Vite):** `http://localhost:8080` (hot reload, requires dev server running)
+- **Production server:** `http://localhost:3000` (serves pre-built UI from `packages/ui/build/`)
+- **Dev mode uses port 8080**, production uses port 3000
+
+**IMPORTANT:** Always use `http://localhost:8080` for development to get instant hot-reload without rebuild cycles. Port 3000 serves pre-built files and requires full rebuild + restart for changes to appear.
+
+## Troubleshooting Build Issues
+
+### "Changes not showing in browser"
+1. Verify build succeeded: Check for `✓ built in Xs` message
+2. Check index.html references correct bundle hashes
+3. Hard refresh browser (disable cache)
+4. Try incognito/private mode
+5. Check browser console for 404s on bundle files
+6. Verify server is serving from correct build directory (check server logs)
+
+### "PostCSS/Tailwind errors"
+- Remove any global `postcss.config.js` outside the project
+- Vite doesn't need PostCSS config for this project
+- If error persists: `rm ~/postcss.config.js`
+
+### "Port already in use"
+```bash
+# Find process on port 3000
+lsof -i :3000
+# Kill it
+kill -9 <PID>
+# Restart
+pnpm start
+```
+
+### "Vite build cache issues"
+```bash
+# Nuclear option - clean everything
+rm -rf packages/ui/build
+rm -rf packages/ui/node_modules/.vite
+rm -rf packages/ui/dist
+cd packages/ui && npm run build
+```
+
+## Testing UI Changes
+
+### Quick Test Cycle (Development)
+1. Make changes to `packages/ui/src/**/*.jsx`
+2. If dev server running on port 8080: Changes auto-reload
+3. If using production mode: Build + hard refresh
+
+### Verify Changes Loaded
+**In browser console:**
+```javascript
+// Check if specific function exists (example)
+console.log(typeof window.detectQuickSetupIntent)
+
+// Force reload
+location.reload(true)
+
+// Clear all cache
+localStorage.clear()
+sessionStorage.clear()
+location.reload(true)
+```
+
+### Bundle Verification
+```bash
+# Check if new code is in built files
+grep -r "YOUR_NEW_FUNCTION_NAME" packages/ui/build/assets/
+
+# Check build timestamps
+ls -lh packages/ui/build/assets/*.js | head -5
+```
+
+## Copilot-Specific Rules
+
+### WorkflowCopilotDock.jsx State Management
+- Always reset ALL state when clearing conversation
+- Use `justCleared` flag to prevent history reload
+- Mode transitions: DISCOVERY → DRAFT → CONFIGURE → REVIEW → READY
+- Pattern detection only runs when: empty canvas + first message
+
+### CRITICAL: React Router v6.3.0 Bug
+**Always wrap functions in useCallback to prevent flash/disappear bug:**
+- Any function defined in component body must use `useCallback`
+- Functions called in render or useMemo must be memoized
+- Empty dependency array `[]` for pure functions (no external deps)
+- This prevents React Router v6.3.0 optional parameter bug
+- Same issue that affected Orchestrator section
+
+### Common Copilot State Variables
+```javascript
+mode            // Current mode (DISCOVERY, BUILDING, DRAFT, CONFIGURE, REVIEWING, READY)
+messages        // Chat history
+answers         // User's workflow configuration answers
+runnable        // Can workflow run?
+reviewData      // Latest validation results
+currentFlowData // Canvas nodes/edges
+```
+
+### Testing Copilot Features
+1. Always test with **empty canvas** first
+2. Test with **marketplace template** second
+3. Test **Clear conversation** works
+4. Check browser console for `[COPILOT]` debug logs
+5. Verify pattern detection logs appear when expected
+
+## Files Often Modified Together
+
+### Copilot UI Changes
+- `packages/ui/src/views/copilot/WorkflowCopilotDock.jsx` (main component)
+- `packages/ui/src/views/copilot/QuickConfigModal.jsx` (credential config)
+- `packages/ui/src/api/copilot.js` (API client)
+- Must rebuild UI after changes
+
+### Copilot Server Changes
+- `packages/server/src/controllers/copilot/index.ts` (endpoints)
+- `packages/server/src/services/copilot/FlowPatchService.ts` (apply logic)
+- `packages/server/src/services/copilot/AutoFixService.ts` (auto-fix)
+- Server auto-restarts if using dev mode
+
+## Performance Notes
+
+### Build Times
+- Clean UI build: ~10-12 seconds
+- Incremental UI build: ~2-3 seconds
+- Component build: ~5-8 seconds
+- Server compile: ~3-5 seconds
+
+### Bundle Sizes
+- Main bundle: ~850KB (270KB gzipped)
+- Code splitting: Some chunks > 500KB (consider dynamic imports for large features)
+
+## Common Commands
+
+```bash
+# Start development (both UI and server)
+pnpm dev
+
+# Start production (pre-built UI)
+pnpm start
+
+# Build UI only
+cd packages/ui && npm run build
+
+# Build components only
+cd packages/components && npm run build
+
+# Clean everything
+rm -rf packages/*/build packages/*/dist packages/*/node_modules/.vite
+
+# Rebuild everything
+pnpm install
+pnpm build
+
+# Kill all Flowise processes
+pkill -9 -f "flowise|nodemon"
+```
+
+## Best Practices
+
+1. **Always clean build when caching issues occur**
+2. **Always hard refresh browser after UI rebuild**
+3. **Always check terminal/console for errors before assuming code didn't load**
+4. **Always use incognito mode for testing if cache suspected**
+5. **Never assume changes loaded without verifying bundle contents or seeing console logs**
+6. **Document any new state variables or mode transitions**
+7. **Add console.log for debugging complex UI flows**
+
+## When Changes Don't Appear
+
+**Checklist:**
+- [ ] Did build succeed? (check for `✓ built` message)
+- [ ] Did server restart? (check for "Flowise Server is listening" log)
+- [ ] Did you hard refresh? (`Cmd/Ctrl + Shift + R`)
+- [ ] Are you on the right port? (3000 for prod, 8080 for dev)
+- [ ] Is browser console showing errors?
+- [ ] Did you check Network tab for 304 (cached) responses?
+- [ ] Did you try incognito mode?
+- [ ] Did you verify new code is in build bundle with grep?
+
+**If all above checked and still not working:**
+1. Nuclear clean: `rm -rf packages/ui/build packages/ui/node_modules/.vite`
+2. Rebuild: `cd packages/ui && npm run build`
+3. Kill server: `pkill -9 -f flowise`
+4. Restart: `pnpm start`
+5. Access in incognito: `http://localhost:3000`
+
+## Architecture Notes
+
+### Monorepo Structure
+- `packages/ui` - React frontend (Vite)
+- `packages/server` - Express backend (TypeScript)
+- `packages/components` - Shared node definitions
+- `packages/api-documentation` - Swagger docs
+
+### Build Dependencies
+- UI depends on: components (for types/interfaces)
+- Server depends on: components (for node execution)
+- Changes to components require rebuilding all dependents
+
+### State Management
+- **UI:** Redux + React context + local state
+- **Server:** Database (TypeORM) + in-memory caches
+- **Copilot:** CopilotState table + local component state
+
+## Debugging Copilot
+
+### Expected Console Logs (if new code loaded)
+```
+[COPILOT] Send triggered: { content: "...", hasNodes: false, messagesLength: 0, ... }
+[COPILOT] Pattern detection result: { matches: true, confidence: "high", ... }
+[COPILOT] Parsed answers from intent: { topic: "...", delivery: "Email", ... }
+```
+
+### If Console Empty
+- New code didn't load
+- Check bundle file contains new code: `grep "COPILOT" packages/ui/build/assets/*.js`
+- Check browser is loading correct bundle (Network tab)
+
+### Mode Transitions to Watch
+```
+Empty canvas → BUILDING (initial)
+Type intent → DRAFT (auto-trigger starts)
+Auto-fix success → CONFIGURE (credential check)
+Credentials OK → REVIEW (final validation)
+Apply → READY (can run)
+```
+

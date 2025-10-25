@@ -15,6 +15,7 @@ const review = (body) => client.post('/copilot/review', body)
 const annotate = (body) => client.post('/copilot/annotate', body)
 const replace = (body) => client.post('/copilot/replace', body)
 const autoFix = (body) => client.post('/copilot/auto-fix', body)
+const interpretIntent = (body) => client.post('/copilot/interpret-intent', body)
 
 export default {
     generate,
@@ -31,7 +32,8 @@ export default {
     review,
     annotate,
     replace,
-    autoFix
+    autoFix,
+    interpretIntent
 }
 
 

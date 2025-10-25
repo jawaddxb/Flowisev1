@@ -121,7 +121,7 @@ const InlineCredentialInput = ({ credentialName, credentialLabel, onSave, onCanc
 
             <Alert severity="info" sx={{ mt: 1.5, fontSize: '0.75rem' }}>
                 <Typography variant="caption">
-                    🔒 Your API key is encrypted and stored locally. We never send it to our servers.
+                    🔒 Your API key is encrypted before storage on the server and never shown in plain text.
                 </Typography>
             </Alert>
         </Box>

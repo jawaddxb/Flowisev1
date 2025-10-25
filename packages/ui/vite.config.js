@@ -22,6 +22,9 @@ export default defineConfig(async ({ mode }) => {
     dotenv.config()
     return {
         plugins: [react()],
+        css: {
+            postcss: null // Disable PostCSS to prevent config loading errors
+        },
         resolve: {
             alias: {
                 '@': resolve(__dirname, 'src'),
