@@ -5,6 +5,9 @@ import { getDataSource } from '../../DataSource'
 import { CopilotState } from '../../database/entities/CopilotState'
 import { AutoFixService } from '../../services/copilot/AutoFixService'
 import intentExtractor from '../../services/copilot/IntentExtractorService'
+import workflowCompiler from '../../services/copilot/WorkflowCompilerService'
+import { DynamicQuestionGenerator } from '../../services/copilot/DynamicQuestionGenerator'
+import { CostEstimator } from '../../services/copilot/CostEstimator'
 import { v4 as uuidv4 } from 'uuid'
 
 const generate = async (req: Request, res: Response, next: NextFunction) => {
@@ -37,8 +40,16 @@ const planEdits = async (req: Request, res: Response, next: NextFunction) => {
 
 const apply = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { flowId, answers, planType } = req.body || {}
+        const { flowId, answers, planType, workflowSpec, useCompiler } = req.body || {}
         if (!flowId) return res.status(400).json({ message: 'flowId is required' })
+        
+        // NEW: If useCompiler flag set and workflowSpec provided, use LLM compiler path
+        if (useCompiler && workflowSpec) {
+            const result = await copilotService.applyFromWorkflowSpec(flowId, workflowSpec, answers || {})
+            return res.json(result)
+        }
+        
+        // LEGACY: Use old applyFromAnswers for backward compatibility
         const result = await copilotService.applyFromAnswers(flowId, answers || {}, planType || 'CHATFLOW')
         return res.json(result)
     } catch (err) {
@@ -414,6 +425,81 @@ export const interpretIntent = async (req: Request, res: Response, next: NextFun
         
         const result = await intentExtractor.extractIntent(message)
         return res.json(result)
+    } catch (err) {
+        next(err)
+    }
+}
+
+// LLM Workflow Compiler: Decompose any workflow into primitives
+export const compileWorkflow = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { message, flowId, context = {} } = req.body
+        if (!message) return res.status(400).json({ message: 'message is required' })
+
+        // Load existing state for context
+        let existingAnswers: Record<string, any> = {}
+        let flowData: any = null
+
+        if (flowId) {
+            try {
+                const ds = getDataSource()
+                const stateRepo = ds.getRepository(CopilotState)
+                const existingState = await stateRepo.findOne({ where: { flowId }, order: { updatedAt: 'DESC' } })
+                if (existingState) {
+                    existingAnswers = JSON.parse(existingState.answers || '{}')
+                }
+            } catch (err: any) {
+                // Silent fail
+            }
+        }
+
+        // Compile workflow using LLM
+        const workflowSpec = await workflowCompiler.compileWorkflow(message, {
+            existingAnswers,
+            flowData: context.flowData || flowData
+        })
+
+        // Generate dynamic questions from spec
+        const questions = await DynamicQuestionGenerator.generateQuestions(workflowSpec, context.workspaceId)
+
+        // Estimate cost
+        const costEstimate = CostEstimator.estimateCost(workflowSpec, existingAnswers.schedule)
+
+        // Save workflowSpec to CopilotState
+        if (flowId) {
+            try {
+                const ds = getDataSource()
+                const stateRepo = ds.getRepository(CopilotState)
+                const existingState = await stateRepo.findOne({ where: { flowId }, order: { updatedAt: 'DESC' } })
+
+                const specData = {
+                    workflowSpec: JSON.stringify(workflowSpec),
+                    planType: workflowSpec.workflow.pattern || 'custom'
+                }
+
+                if (existingState) {
+                    Object.assign(existingState, specData)
+                    await stateRepo.save(existingState)
+                } else {
+                    const newState = new CopilotState()
+                    newState.id = uuidv4()
+                    newState.flowId = flowId
+                    newState.answers = '{}'
+                    Object.assign(newState, specData)
+                    await stateRepo.save(newState)
+                }
+            } catch (err: any) {
+                // Silent fail
+            }
+        }
+
+        return res.json({
+            workflowSpec,
+            questions,
+            costEstimate,
+            pattern: workflowSpec.workflow.pattern,
+            description: workflowSpec.workflow.description
+        })
     } catch (err) {
         next(err)
     }

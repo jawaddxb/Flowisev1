@@ -45,6 +45,10 @@ const buildGraphFromAnswers = async (
     const nodes: any[] = []
     const edges: any[] = []
     
+    // Shared variables for delivery (used across plan types)
+    const delivery = answers.delivery || 'In-app'
+    const emailProvider = answers.emailProvider || 'resend-platform'
+    
     // Helper to find credential ID for a node
     const getCredentialId = (nodeName: string): string | undefined => {
         return credentialMappings.find(m => m.nodeName === nodeName)?.credentialId
@@ -77,7 +81,6 @@ const buildGraphFromAnswers = async (
         if (!topic) {
             throw new Error('Missing required topic/goal; please confirm the topic before applying.')
         }
-        const delivery = answers.delivery || 'In-app'
         const schedule = answers.schedule || 'Run now'
         
         const toolNodes: any[] = []
@@ -178,6 +181,57 @@ const buildGraphFromAnswers = async (
         }
         nodes.push(deliveryNote)
         
+        // 7. Add delivery node based on provider
+        if (delivery === 'Email') {
+            const provider = emailProvider
+            let deliveryNode: any | null = null
+            
+            if (provider === 'resend-platform') {
+                deliveryNode = NodeTemplateResolver.createNode({
+                    name: 'resend',
+                    label: 'Platform Email',
+                    position: { x: 1300, y: 300 },
+                    inputs: {
+                        to: '{{user_email}}',
+                        subject: `${topic} - ${schedule}`,
+                        body: '{{summary}}'
+                    },
+                    credential: getCredentialId('resend')
+                })
+            } else if (provider === 'gmail-personal') {
+                deliveryNode = NodeTemplateResolver.createNode({
+                    name: 'gmail',
+                    label: 'Gmail',
+                    position: { x: 1300, y: 300 },
+                    inputs: {
+                        gmailType: 'messages',
+                        messageActions: ['sendMessage'],
+                        messageTo: '{{user_email}}',
+                        messageSubject: `${topic} - ${schedule}`,
+                        messageBody: '{{summary}}'
+                    }
+                })
+            } else if (provider === 'outlook-personal') {
+                deliveryNode = NodeTemplateResolver.createNode({
+                    name: 'microsoftOutlook',
+                    label: 'Outlook',
+                    position: { x: 1300, y: 300 },
+                    inputs: {
+                        outlookType: 'message',
+                        messageActions: ['sendMessage'],
+                        toSendMessage: '{{user_email}}',
+                        subjectSendMessage: `${topic} - ${schedule}`,
+                        bodySendMessage: '{{summary}}'
+                    }
+                })
+            }
+            
+            if (deliveryNode) {
+                nodes.push(deliveryNode)
+                nodes.push(makeNote(deliveryNode, `Added: ${deliveryNode.label}\nDelivers results via email.`, '#E0F2FE'))
+            }
+        }
+        
     } else {
         // Simple chatflow: just add a chat model
         const llmNode = NodeTemplateResolver.createNode({
@@ -208,9 +262,24 @@ const applyFromAnswers = async (flowId: string, answers: Record<string, any>, pl
     const workspaceId = chatflow.workspaceId
     
     // Get node names for credential validation
-    const nodeNamesNeeded = planType === 'MULTIAGENT' 
+    const nodeNamesNeededBase = planType === 'MULTIAGENT'
         ? ['braveSearchAPI', 'webScraperTool', 'chatOpenRouter', 'toolAgent']
         : ['chatOpenRouter']
+    
+    // Add delivery nodes based on provider choice
+    const delivery = answers.delivery || 'In-app'
+    const emailProvider = answers.emailProvider || 'resend-platform'
+    const deliveryNodesNeeded =
+        delivery === 'Email'
+            ? emailProvider === 'resend-platform'
+                ? ['resend']
+                : emailProvider === 'gmail-personal'
+                    ? ['gmail']
+                    : emailProvider === 'outlook-personal'
+                        ? ['microsoftOutlook']
+                        : []
+            : []
+    const nodeNamesNeeded = [...nodeNamesNeededBase, ...deliveryNodesNeeded]
     
     // Validate credentials and get mappings
     const { gaps: credentialGaps, credentialMappings } = await CredentialValidator.validateNodeCredentials(
@@ -259,8 +328,8 @@ const applyFromAnswers = async (flowId: string, answers: Record<string, any>, pl
     })
     const sources = Array.isArray(answers.sources) ? answers.sources.join(' + ') : answers.sources || 'sources'
     const topic = answers.topic || answers.goal || 'your topic'
-    const delivery = answers.delivery || 'In-app'
-    edit.summary = `Applied: Search ${sources} for "${topic}", deliver to ${delivery}`
+    const deliverySummary = answers.delivery || 'In-app'
+    edit.summary = `Applied: Search ${sources} for "${topic}", deliver to ${deliverySummary}`
     await editRepo.save(edit)
     
     // Save updated flow
@@ -724,7 +793,111 @@ const replaceFlow = async (flowId: string, template: string, options: { answers?
     }
 }
 
-export default { plan, apply, applyFromAnswers, undoLast, autoApplyFromState, reviewFlow, annotateFlow, replaceFlow }
+/**
+ * Apply workflow from LLM-generated WorkflowSpec (new compiler-based path)
+ */
+const applyFromWorkflowSpec = async (flowId: string, workflowSpec: any, answers: Record<string, any>) => {
+    const app = getRunningExpressApp()
+    const flowRepo = app.AppDataSource.getRepository(ChatFlow)
+    const editRepo = app.AppDataSource.getRepository(CopilotEdit)
+    
+    const chatflow = await flowRepo.findOneBy({ id: flowId })
+    if (!chatflow) throw new Error('Chatflow not found')
+    
+    const currentFlowData = JSON.parse(chatflow.flowData || '{"nodes":[],"edges":[]}')
+    const workspaceId = chatflow.workspaceId
+    
+    // Import PrimitiveMapper
+    const { PrimitiveMapper } = require('./PrimitiveMapper')
+    
+    // Map primitives to Flowise nodes and edges
+    const { nodes: newNodes, edges: newEdges } = PrimitiveMapper.mapPrimitiveGraph(workflowSpec, [])
+    
+    // Extract services for credential validation
+    const services = PrimitiveMapper.extractServices(workflowSpec)
+    
+    // Detect credentials using IntegrationCatalog
+    const { INTEGRATION_CATALOG } = require('./IntegrationCatalog')
+    const credentialGaps = []
+    const credentialMappings = []
+    
+    for (const service of services) {
+        const integration = INTEGRATION_CATALOG[service]
+        if (!integration || integration.credentials.length === 0) continue
+        
+        for (const credName of integration.credentials) {
+            const exists = await CredentialValidator.credentialExists(credName, workspaceId)
+            if (!exists) {
+                credentialGaps.push({
+                    field: `credential:${credName}`,
+                    label: `${service} - ${credName}`,
+                    type: 'credential',
+                    credentialName: credName,
+                    isPersonal: integration.isPersonal
+                })
+            }
+        }
+    }
+    
+    if (credentialGaps.length > 0) {
+        return {
+            applied: false,
+            needs_config: true,
+            gaps: credentialGaps,
+            message: `Missing credentials: ${credentialGaps.map((g) => g.label).join(', ')}`
+        }
+    }
+    
+    // Merge with existing nodes
+    const updatedFlowData = {
+        nodes: [...(currentFlowData.nodes || []), ...newNodes],
+        edges: [...(currentFlowData.edges || []), ...newEdges]
+    }
+    
+    // Validate graph
+    const validation = GraphValidator.validateGraph(updatedFlowData)
+    if (!validation.valid) {
+        return {
+            applied: false,
+            graphIssues: validation.issues,
+            message: `Graph validation failed: ${validation.issues.join('; ')}`
+        }
+    }
+    
+    // Record edit
+    const edit = new CopilotEdit()
+    edit.id = uuidv4()
+    edit.flowId = flowId
+    edit.conversationId = flowId
+    edit.operations = JSON.stringify({
+        previousFlowData: currentFlowData,
+        appliedNodes: newNodes,
+        appliedEdges: newEdges
+    })
+    edit.summary = `Applied: ${workflowSpec.workflow.name || 'Custom workflow'} (${workflowSpec.workflow.pattern})`
+    await editRepo.save(edit)
+    
+    // Save workflow
+    chatflow.flowData = JSON.stringify(updatedFlowData)
+    chatflow.updatedDate = new Date()
+    await flowRepo.save(chatflow)
+    
+    const changedNodes = (newNodes || [])
+        .filter((n: any) => n.type !== 'stickyNote')
+        .map((n: any) => ({
+            id: n.id,
+            label: n.data?.label || n.data?.name || n.type || 'Node'
+        }))
+    
+    return {
+        flowData: updatedFlowData,
+        applied: true,
+        changedNodes,
+        message: `Workflow applied! Added ${changedNodes.length} nodes and ${newEdges.length} connections.`
+    }
+}
+
+export default { plan, apply, applyFromAnswers, applyFromWorkflowSpec, undoLast, autoApplyFromState, reviewFlow, annotateFlow, replaceFlow }
 
 
 

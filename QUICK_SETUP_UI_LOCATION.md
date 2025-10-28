@@ -150,3 +150,4 @@ Quick Setup box disappears, replaced by review panel showing credential status.
 - Email preview: `packages/ui/src/views/copilot/EmailPreviewPanel.jsx`
 - Backend handler: `packages/server/src/controllers/copilot/index.ts` (autoFix endpoint)
 
+

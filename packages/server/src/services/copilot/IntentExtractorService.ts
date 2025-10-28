@@ -107,14 +107,14 @@ Be precise. Extract what's explicitly stated. Ask clarifying questions for ambig
             logger.debug(`[IntentExtractor] Calling LLM for: "${message.substring(0, 50)}..."`)
 
             const response = await this.openai.chat.completions.create({
-                model: 'gpt-4o-mini',
+                model: 'gpt-4o',  // Upgraded from mini for better complex workflow understanding
                 messages: [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: message }
                 ],
                 response_format: { type: 'json_object' },
                 temperature: 0.3,
-                max_tokens: 500
+                max_tokens: 800  // Increased for more detailed extraction
             })
 
             const content = response.choices[0].message.content || '{}'

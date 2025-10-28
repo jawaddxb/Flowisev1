@@ -16,6 +16,8 @@ const annotate = (body) => client.post('/copilot/annotate', body)
 const replace = (body) => client.post('/copilot/replace', body)
 const autoFix = (body) => client.post('/copilot/auto-fix', body)
 const interpretIntent = (body) => client.post('/copilot/interpret-intent', body)
+const getQuota = () => client.get('/enterprise/organization/get-current-usage')
+const compileWorkflow = (body) => client.post('/copilot/compile-workflow', body)
 
 export default {
     generate,
@@ -33,7 +35,9 @@ export default {
     annotate,
     replace,
     autoFix,
-    interpretIntent
+    interpretIntent,
+    getQuota,
+    compileWorkflow
 }
 
 

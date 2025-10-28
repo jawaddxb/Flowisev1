@@ -144,3 +144,4 @@ Implemented a UI-first quick setup flow inspired by Lindy AI, focusing on minima
 - UI: Add actual email content generation and send capability
 - Feature flags: Wire COPILOT_ENABLED, MANAGED_CREDENTIALS_ENABLED flags
 
+

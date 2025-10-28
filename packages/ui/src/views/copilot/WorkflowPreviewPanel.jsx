@@ -4,78 +4,95 @@ import { Box, Card, CardContent, Typography, Stack, Fade, useMediaQuery } from '
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
 import PropTypes from 'prop-types'
 
-const WorkflowPreviewPanel = ({ answers, visible, dockWidth = 400 }) => {
+const getPrimitiveIconForPreview = (primitive) => ({
+    'data_source': '📥',
+    'processor': '⚙️',
+    'ai_agent': '🤖',
+    'integrator': '🔗',
+    'controller': '🎛️',
+    'storage': '💾',
+    'communicator': '📤'
+}[primitive] || '📦')
+
+const WorkflowPreviewPanel = ({ answers, workflowSpec, visible, dockWidth = 400 }) => {
     const theme = useTheme()
     const customization = useSelector((state) => state.customization)
     const isLargeScreen = useMediaQuery(theme.breakpoints.up('lg'))
     
     // Don't show on small screens to avoid overlap
-    if (!visible || !answers || !isLargeScreen) return null
+    if (!visible || !isLargeScreen) return null
     
-    const nodes = []
-    const sources = Array.isArray(answers.sources) ? answers.sources : 
-                    answers.sources ? [answers.sources] : []
+    let nodes = []
     
-    // Build nodes array
-    if (sources.includes('YouTube')) nodes.push({ key: 'youtube', icon: '🎥', label: 'YouTube Monitor' })
-    if (sources.includes('Web')) nodes.push({ key: 'web', icon: '🌐', label: 'Web Search' })
-    if (sources.includes('News')) nodes.push({ key: 'news', icon: '📰', label: 'News Search' })
-    if (sources.includes('Twitter')) nodes.push({ key: 'twitter', icon: '🐦', label: 'Twitter Search' })
-    if (sources.includes('Reddit')) nodes.push({ key: 'reddit', icon: '💬', label: 'Reddit Search' })
-    
-    // Add transcription for YouTube
-    if (sources.includes('YouTube')) {
-        nodes.push({ key: 'transcribe', icon: '🎙️', label: 'Transcribe Audio' })
+    // NEW: If we have workflowSpec from LLM, use primitives
+    if (workflowSpec?.workflow?.nodes) {
+        nodes = workflowSpec.workflow.nodes.map((node, idx) => ({
+            key: node.id || `node-${idx}`,
+            icon: getPrimitiveIconForPreview(node.primitive),
+            label: node.label,
+            primitive: node.primitive
+        }))
+    } else if (answers) {
+        // FALLBACK: Legacy logic for backward compatibility
+        const sources = Array.isArray(answers.sources) ? answers.sources : 
+                        answers.sources ? [answers.sources] : []
+        
+        // Build nodes array from answers
+        if (sources.includes('YouTube')) nodes.push({ key: 'youtube', icon: '🎥', label: 'YouTube Monitor', primitive: 'data_source' })
+        if (sources.includes('Web')) nodes.push({ key: 'web', icon: '🌐', label: 'Web Search', primitive: 'data_source' })
+        if (sources.includes('News')) nodes.push({ key: 'news', icon: '📰', label: 'News Search', primitive: 'data_source' })
+        if (sources.includes('Twitter')) nodes.push({ key: 'twitter', icon: '🐦', label: 'Twitter Search', primitive: 'data_source' })
+        if (sources.includes('Reddit')) nodes.push({ key: 'reddit', icon: '💬', label: 'Reddit Search', primitive: 'data_source' })
+        
+        // Add transcription for YouTube
+        if (sources.includes('YouTube')) {
+            nodes.push({ key: 'transcribe', icon: '🎙️', label: 'Transcribe Audio', primitive: 'ai_agent' })
+        }
+        
+        if (answers.topic) {
+            nodes.push({ key: 'research', icon: '🔍', label: `Research: ${answers.topic}`, primitive: 'processor' })
+        }
+        
+        // Add AI processing
+        if (nodes.length > 0) {
+            nodes.push({ key: 'ai', icon: '🤖', label: 'AI Synthesize', primitive: 'ai_agent' })
+        }
+        
+        if (answers.delivery === 'Email') nodes.push({ key: 'email', icon: '📧', label: 'Send Email', primitive: 'communicator' })
+        if (answers.delivery === 'Slack') nodes.push({ key: 'slack', icon: '💬', label: 'Post to Slack', primitive: 'communicator' })
+        if (answers.delivery === 'Notion') nodes.push({ key: 'notion', icon: '📝', label: 'Save to Notion', primitive: 'communicator' })
     }
-    
-    if (answers.topic) {
-        nodes.push({ key: 'research', icon: '🔍', label: `Research: ${answers.topic}` })
-    }
-    
-    // Add AI processing
-    if (nodes.length > 0) {
-        nodes.push({ key: 'ai', icon: '🤖', label: 'AI Synthesize' })
-    }
-    
-    if (answers.delivery === 'Email') nodes.push({ key: 'email', icon: '📧', label: 'Send Email' })
-    if (answers.delivery === 'Slack') nodes.push({ key: 'slack', icon: '💬', label: 'Post to Slack' })
-    if (answers.delivery === 'Notion') nodes.push({ key: 'notion', icon: '📝', label: 'Save to Notion' })
     
     if (nodes.length === 0) return null
     
-    const getNodeColor = (key) => {
+    const getNodeColor = (node) => {
+        // Use primitive type for universal coloring
+        const primitive = node.primitive || 'default'
+        
         if (customization.isDarkMode) {
             const darkColors = {
-                youtube: '#404040',
-                web: '#1e3a8a',
-                news: '#4c1d95',
-                twitter: '#1e40af',
-                reddit: '#7c2d12',
-                research: '#14532d',
-                transcribe: '#713f12',
-                ai: '#6b21a8',
-                email: '#7f1d1d',
-                slack: '#064e3b',
-                notion: '#1e293b',
+                data_source: '#1e3a8a',
+                processor: '#14532d',
+                ai_agent: '#6b21a8',
+                integrator: '#7c2d12',
+                controller: '#713f12',
+                storage: '#404040',
+                communicator: '#7f1d1d',
                 default: theme.palette.card.main
             }
-            return darkColors[key] || darkColors.default
+            return darkColors[primitive] || darkColors.default
         } else {
             const lightColors = {
-                youtube: '#fff8e1',
-                web: '#dbeafe',
-                news: '#f3e8ff',
-                twitter: '#dbeafe',
-                reddit: '#fed7aa',
-                research: '#dcfce7',
-                transcribe: '#fef3c7',
-                ai: '#f3e8ff',
-                email: '#fee2e2',
-                slack: '#d1fae5',
-                notion: '#e2e8f0',
+                data_source: '#dbeafe',
+                processor: '#dcfce7',
+                ai_agent: '#f3e8ff',
+                integrator: '#fed7aa',
+                controller: '#fef3c7',
+                storage: '#e2e8f0',
+                communicator: '#fee2e2',
                 default: theme.palette.card.main
             }
-            return lightColors[key] || lightColors.default
+            return lightColors[primitive] || lightColors.default
         }
     }
     
@@ -102,7 +119,7 @@ const WorkflowPreviewPanel = ({ answers, visible, dockWidth = 400 }) => {
                     {nodes.map((node, idx) => (
                         <Box key={idx} sx={{ width: '100%' }}>
                             <Card sx={{
-                                bgcolor: getNodeColor(node.key),
+                                bgcolor: getNodeColor(node),
                                 border: `1px solid ${theme.palette.grey[900]}25`,
                                 borderRadius: `${customization.borderRadius}px`,
                                 boxShadow: 'none',
@@ -142,6 +159,7 @@ const WorkflowPreviewPanel = ({ answers, visible, dockWidth = 400 }) => {
 
 WorkflowPreviewPanel.propTypes = {
     answers: PropTypes.object,
+    workflowSpec: PropTypes.object,
     visible: PropTypes.bool,
     dockWidth: PropTypes.number
 }

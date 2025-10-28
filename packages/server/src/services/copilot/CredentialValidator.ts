@@ -62,7 +62,7 @@ export class CredentialValidator {
                     })
                 } else {
                     // Credential missing - add to gaps
-                    const companyManagedCreds = ['braveSearchApi', 'openRouterApi', 'serperApi', 'serpApi']
+                    const companyManagedCreds = ['braveSearchApi', 'openRouterApi', 'serperApi', 'serpApi', 'firecrawlApi', 'resendApi']
                     const isPersonal = !companyManagedCreds.includes(credName)
 
                     gaps.push({

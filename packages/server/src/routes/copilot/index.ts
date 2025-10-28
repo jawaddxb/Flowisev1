@@ -1,5 +1,5 @@
 import express from 'express'
-import copilotController, { classifyAndPlan, clarify, capabilities, chat, undo, autoApply, review, annotate, replace, autoFix, interpretIntent } from '../../controllers/copilot'
+import copilotController, { classifyAndPlan, clarify, capabilities, chat, undo, autoApply, review, annotate, replace, autoFix, interpretIntent, compileWorkflow } from '../../controllers/copilot'
 import { getHistory, clearHistory } from '../../controllers/copilot/history'
 const router = express.Router()
 
@@ -19,6 +19,7 @@ router.post('/annotate', annotate)
 router.post('/replace', replace)
 router.post('/auto-fix', autoFix)
 router.post('/interpret-intent', interpretIntent)
+router.post('/compile-workflow', compileWorkflow)
 
 export default router
 

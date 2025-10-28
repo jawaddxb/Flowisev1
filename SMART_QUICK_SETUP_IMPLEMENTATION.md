@@ -234,3 +234,4 @@ None - uses existing state and APIs
 - Add confidence scoring to pattern detection
 - Support multi-language pattern detection
 
+

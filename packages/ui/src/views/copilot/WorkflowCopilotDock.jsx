@@ -17,9 +17,67 @@ import WorkflowExplainerModal from './WorkflowExplainerModal'
 import WorkflowPreviewPanel from './WorkflowPreviewPanel'
 import { buildExplainerFromAnswers } from './utils/explainer'
 
-const GhostPreview = ({ answers }) => {
+const GhostPreview = ({ answers, workflowSpec }) => {
     const theme = useTheme()
     const customization = useSelector((state) => state.customization)
+    
+    // Helper for primitive icons
+    const getPrimitiveIcon = (primitive) => ({
+        'data_source': '📥',
+        'processor': '⚙️',
+        'ai_agent': '🤖',
+        'integrator': '🔗',
+        'controller': '🎛️',
+        'storage': '💾',
+        'communicator': '📤'
+    }[primitive] || '📦')
+    
+    // If we have workflowSpec from LLM, use primitives
+    if (workflowSpec?.workflow?.nodes) {
+        const nodes = workflowSpec.workflow.nodes.map(node => {
+            const icon = getPrimitiveIcon(node.primitive)
+            return `${icon} ${node.label}`
+        })
+        
+        return (
+            <Box sx={{ 
+                p: 2, 
+                borderRadius: `${customization.borderRadius}px`,
+                bgcolor: theme.palette.card.main,
+                border: `1px solid ${theme.palette.grey[900]}25`,
+                my: 2,
+                boxShadow: '0 2px 14px 0 rgb(32 40 45 / 8%)'
+            }}>
+                <Typography variant="caption" sx={{ 
+                    fontWeight: 600, 
+                    display: 'block', 
+                    mb: 1.5,
+                    color: 'text.secondary'
+                }}>
+                    Preview ({workflowSpec.workflow.pattern})
+                </Typography>
+                <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                    {nodes.map((n, idx) => (
+                        <Chip 
+                            key={`ghost-node-${idx}`}
+                            label={n} 
+                            size="small" 
+                            sx={{ 
+                                bgcolor: theme.palette.primary.light + '20',
+                                color: theme.palette.primary.main,
+                                border: `1px solid ${theme.palette.primary.main}40`,
+                                '&:hover': {
+                                    bgcolor: theme.palette.primary.light + '30'
+                                }
+                            }} 
+                        />
+                    ))}
+                </Stack>
+            </Box>
+        )
+    }
+    
+    // Fallback to legacy logic for backward compatibility
     const nodes = []
     
     // Handle sources as array or string
@@ -166,6 +224,7 @@ const WorkflowCopilotDock = ({ open, onToggleMax, flowId, defaultOpenGreeting = 
     const annotateApi = useApi(copilotApi.annotate)
     const replaceApi = useApi(copilotApi.replace)
     const autoFixApi = useApi(copilotApi.autoFix)
+    const quotaApi = useApi(copilotApi.getQuota)
     const [required, setRequired] = useState([])
     const [missing, setMissing] = useState([])
     const [runnable, setRunnable] = useState(false)
@@ -197,6 +256,9 @@ const WorkflowCopilotDock = ({ open, onToggleMax, flowId, defaultOpenGreeting = 
     const [isProcessing, setIsProcessing] = useState(false)
     const [showEmailPreview, setShowEmailPreview] = useState(false)
     const [prefilledFromIntentIds, setPrefilledFromIntentIds] = useState(new Set())
+    const [workflowSpec, setWorkflowSpec] = useState(null)  // From LLM compiler
+    const [costEstimate, setCostEstimate] = useState(null)  // Predictions/API calls estimate
+    const [compileLoading, setCompileLoading] = useState(false)  // Manual loading state for compiler
 
     useEffect(() => {
         if (!open || !flowId) return
@@ -219,6 +281,8 @@ const WorkflowCopilotDock = ({ open, onToggleMax, flowId, defaultOpenGreeting = 
             setMissing([])
             setSchema([])
             setNextQuestions([])
+            setWorkflowSpec(null)  // Reset LLM compiler state
+            setCostEstimate(null)  // Reset cost estimate
             
             // Show discovery message for template with full explainer
             setTimeout(() => {
@@ -280,6 +344,13 @@ What would you like this workflow to do? Describe it in your own words.`,
         return () => clearTimeout(timer)
         // eslint-disable-next-line
     }, [open, flowId, currentFlowData, mode])
+
+    // Load quota when in REVIEWING mode
+    useEffect(() => {
+        if (mode === 'REVIEWING' || mode === 'REVIEW') {
+            quotaApi.request({})
+        }
+    }, [mode])
 
     useEffect(() => {
         if (reviewApi.data) {
@@ -580,6 +651,79 @@ What would you like this workflow to do? Describe it in your own words.`,
             willCheckPattern: (!hasNodes || mode === 'DISCOVERY') && messages.length <= 1 
         })
         
+        // NEW: If this is first meaningful message and no workflowSpec yet, compile workflow with LLM
+        if (!workflowSpec && messages.length === 0 && content.length > 20) {
+            console.log('[COPILOT] Compiling workflow from intent:', content)
+            setCompileLoading(true)
+            
+            try {
+                // Call API directly (not via useApi hook to avoid TDZ issues)
+                const compileResult = await copilotApi.compileWorkflow({
+                    message: content,
+                    flowId,
+                    context: {
+                        workspaceId: currentFlowData?.workspaceId,
+                        flowData: currentFlowData
+                    }
+                })
+                
+                setCompileLoading(false)
+                
+                if (compileResult?.data) {
+                    const { workflowSpec: spec, questions, costEstimate: cost, pattern, description } = compileResult.data
+                    
+                    // Store LLM output
+                    setWorkflowSpec(spec)
+                    setCostEstimate(cost)
+                    setPlanType(pattern)
+                    
+                    // Convert LLM questions to schema format
+                    const dynamicSchema = questions.map(q => ({
+                        id: q.id,
+                        type: q.type,
+                        text: q.text,
+                        required: q.required,
+                        options: q.options || [],
+                        multi: q.type === 'multiselect',
+                        credentialType: q.credentialType,
+                        credentialName: q.credentialName,
+                        isPersonal: q.isPersonal
+                    }))
+                    
+                    setSchema(dynamicSchema)
+                    setNextQuestions(dynamicSchema.filter(q => q.required))
+                    
+                    // Calculate missing/required
+                    const requiredIds = questions.filter(q => q.required).map(q => q.id)
+                    setRequired(requiredIds)
+                    setMissing(requiredIds)
+                    setAnsweredCount(0)
+                    setTotalRequired(requiredIds.length)
+                    setRunnable(requiredIds.length === 0)
+                    
+                    // Set mode
+                    setMode('BUILDING')
+                    
+                    // Add assistant message
+                    setMessages(prev => [
+                        ...prev,
+                        { role: 'user', content },
+                        { 
+                            role: 'assistant', 
+                            content: `I understand you want to build: **${spec.workflow.name}**\n\n${description}\n\nI need a few details to set this up:` 
+                        }
+                    ])
+                    
+                    setInput('')
+                    return
+                }
+            } catch (err) {
+                console.error('[COPILOT] Workflow compilation failed:', err)
+                setCompileLoading(false)
+                // Fall back to old logic below
+            }
+        }
+        
         // Detect Quick Setup intent on first message (empty canvas OR discovery mode for templates)
         if ((!hasNodes || mode === 'DISCOVERY') && messages.length <= 1) {
             const intentMatch = detectQuickSetupIntent(content)
@@ -817,10 +961,17 @@ What would you like this workflow to do? Describe it in your own words.`,
         } catch (e) {}
     }
 
-    const handleComplete = async () => {
-        if (!runnable || !flowId) return
+    const handleComplete = useCallback(async () => {
+        if (!canComplete || !flowId) return
         try {
-            const result = await applyApi.request({ flowId, answers, planType })
+            // NEW: Pass workflowSpec if available (from LLM compiler)
+            const result = await applyApi.request({ 
+                flowId, 
+                answers, 
+                planType,
+                workflowSpec: workflowSpec,  // LLM primitive graph
+                useCompiler: !!workflowSpec  // Flag to use new apply path
+            })
             if (result?.needs_config) {
                 setConfigGaps(result.gaps || [])
                 setShowConfigModal(true)
@@ -868,7 +1019,7 @@ What would you like this workflow to do? Describe it in your own words.`,
             const msg = e?.response?.data?.message || 'Failed to save workflow plan'
             setToast({ open: true, message: msg, severity: 'error' })
         }
-    }
+    }, [flowId, applyApi, answers, planType, workflowSpec, setConfigGaps, setShowConfigModal, setApplied, setMode, setToast, setShowUndo, undoTimer, setUndoTimer, planSummary, onFlowUpdate])
 
     const handleUndo = async () => {
         if (!flowId) return
@@ -1023,6 +1174,8 @@ What would you like this workflow to do? Describe it in your own words.`,
         setAnswers({})
         setPlanType('')
         setRunnable(false)
+        setWorkflowSpec(null)  // Reset LLM compiler state
+        setCostEstimate(null)  // Reset cost estimate
     }
 
     // Handle intent submission from Discovery mode
@@ -1427,10 +1580,15 @@ What would you like this workflow to do? Describe it in your own words.`,
     }, [mode, runnable])
 
     // Check if any API is loading
-    const isLoading = applyApi.loading || reviewApi.loading || annotateApi.loading || replaceApi.loading
+    const isLoading = applyApi.loading || reviewApi.loading || annotateApi.loading || replaceApi.loading || compileLoading
 
-    // Unified primary CTA
+    // Unified primary CTA (avoid referencing canComplete directly to prevent TDZ in minified builds)
     const primaryCTA = useMemo(() => {
+        // Compute locally to avoid cross-scope reference during minification
+        const allRequiredAnswered = mode === 'BUILDING' && required.every((r) => {
+            const val = answers[r]
+            return Boolean(val && (!Array.isArray(val) || val.length > 0))
+        })
         if (mode === 'READY') {
             return { label: 'Run workflow', icon: <IconPlayerPlay size={16} />, onClick: () => {/* TODO: open run panel */}, color: 'primary', disabled: isLoading, loading: false }
         }
@@ -1460,6 +1618,17 @@ What would you like this workflow to do? Describe it in your own words.`,
                     setMessages([{ role: 'assistant', content: 'What would you like to change or add to this flow?' }])
                 }
             }, color: 'warning', disabled: isLoading, loading: false }
+        }
+        // NEW: Priority for BUILDING mode with all required answers
+        if (allRequiredAnswered) {
+            return {
+                label: 'Complete & Build Workflow',
+                icon: <IconCheck size={16} />,
+                onClick: handleComplete,
+                color: 'success',
+                disabled: isLoading,
+                loading: applyApi.loading
+            }
         }
         if (mode === 'BUILDING' && runnable) {
             return { label: 'Build & test', icon: <IconCheck size={16} />, onClick: async () => {
@@ -1511,12 +1680,13 @@ What would you like this workflow to do? Describe it in your own words.`,
             }, color: 'success', disabled: isLoading, loading: applyApi.loading }
         }
         return { label: 'Keep answering...', icon: null, onClick: null, color: 'inherit', disabled: true, loading: false }
-    }, [mode, runnable, flowId, answers, planType, applyApi, planSummary, onFlowUpdate, setMode, setMessages, setApplied, setConfigGaps, setShowConfigModal, setToast, setShowUndo, setUndoTimer, isLoading, reviewData])
+    }, [mode, runnable, required, answers, handleComplete, flowId, planType, applyApi, planSummary, onFlowUpdate, setMode, setMessages, setApplied, setConfigGaps, setShowConfigModal, setToast, setShowUndo, setUndoTimer, isLoading, reviewData])
 
     return (
         <>
             <WorkflowPreviewPanel 
                 answers={answers} 
+                workflowSpec={workflowSpec}
                 visible={mode === 'BUILDING' && hasExplainableContent && open}
                 dockWidth={width}
             />
@@ -1552,6 +1722,9 @@ What would you like this workflow to do? Describe it in your own words.`,
                             setApplied(false)
                             setShowUndo(false)
                             setReviewData(null)
+                            setWorkflowSpec(null)  // NEW: Reset LLM compiler state
+                            setCostEstimate(null)  // NEW: Reset cost estimate
+                            setPrefilledFromIntentIds(new Set())  // Clear pre-filled tracking
                             setConfigGaps([])
                             setIntentInput('')
                             setUserIntent('')
@@ -1750,9 +1923,9 @@ What would you like this workflow to do? Describe it in your own words.`,
                     </Box>
                 )}
                 
-                {/* Ghost Preview - show draft workflow based on answers */}
-                {mode === 'BUILDING' && (answers.topic || answers.sources || answers.delivery) && (
-                    <GhostPreview answers={answers} />
+                {/* Ghost Preview - show draft workflow based on answers or workflowSpec */}
+                {mode === 'BUILDING' && (workflowSpec || answers.topic || answers.sources || answers.delivery) && (
+                    <GhostPreview answers={answers} workflowSpec={workflowSpec} />
                 )}
                 
                 {/* Inline credential input (from old flow) */}
@@ -1845,6 +2018,36 @@ What would you like this workflow to do? Describe it in your own words.`,
                         })}
                     </Stack>
                 )}
+                
+                {/* Cost Estimate (if available) */}
+                {mode === 'BUILDING' && costEstimate && required.every((r) => {
+                    const val = answers[r]
+                    return Boolean(val && (!Array.isArray(val) || val.length > 0))
+                }) && (
+                    <Alert severity='info' icon={<IconChartDots3 size={16} />} sx={{ m: 1 }}>
+                        <Typography variant='caption' sx={{ display: 'block', fontWeight: 600, mb: 0.5 }}>
+                            Estimated cost per run:
+                        </Typography>
+                        <Typography variant='caption'>
+                            🤖 {costEstimate.predictions_per_run} AI prediction{costEstimate.predictions_per_run > 1 ? 's' : ''} • 
+                            📡 {costEstimate.external_api_calls} API call{costEstimate.external_api_calls > 1 ? 's' : ''} • 
+                            Complexity: {costEstimate.complexity}
+                        </Typography>
+                        {costEstimate.estimated_monthly_cost && (
+                            <Typography variant='caption' sx={{ display: 'block', mt: 0.5, fontStyle: 'italic' }}>
+                                ~{costEstimate.estimated_monthly_cost} predictions/month
+                            </Typography>
+                        )}
+                    </Alert>
+                )}
+                
+                {/* Quota display in REVIEWING mode */}
+                {(mode === 'REVIEWING' || mode === 'REVIEW') && quotaApi.data && (
+                    <Alert severity='info' sx={{ m: 1 }}>
+                        💳 {quotaApi.data?.predictions?.usage ?? 0} / {quotaApi.data?.predictions?.limit ?? 1000} predictions used this month
+                    </Alert>
+                )}
+                
                 {runnable && planSummary && (
                     <Box sx={{ p: 1 }}>
                         <Typography variant='caption' color='text.secondary'>Plan</Typography>
@@ -1868,6 +2071,53 @@ What would you like this workflow to do? Describe it in your own words.`,
                                 Update
                             </Button>
                         </Stack>
+                        
+                        {/* Email provider picker for email delivery */}
+                        {answers.delivery === 'Email' && mode === 'BUILDING' && (
+                            <Box sx={{ mt: 2, p: 1.5, bgcolor: '#f0f9ff', borderRadius: 1 }}>
+                                <Typography variant='caption' sx={{ fontWeight: 600, display: 'block', mb: 1 }}>
+                                    Email provider
+                                </Typography>
+                                <Stack direction='row' spacing={1} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                                    <Chip
+                                        label="📧 Platform Email (Free)"
+                                        size="small"
+                                        color={(!answers.emailProvider || answers.emailProvider === 'resend-platform') ? 'primary' : 'default'}
+                                        onClick={() => setAnswers({ ...answers, emailProvider: 'resend-platform' })}
+                                        sx={{ cursor: 'pointer' }}
+                                    />
+                                    <Chip
+                                        label="📧 My Gmail (OAuth)"
+                                        size="small"
+                                        color={answers.emailProvider === 'gmail-personal' ? 'primary' : 'default'}
+                                        onClick={() => setAnswers({ ...answers, emailProvider: 'gmail-personal' })}
+                                        sx={{ cursor: 'pointer' }}
+                                    />
+                                    <Chip
+                                        label="📧 My Outlook (OAuth)"
+                                        size="small"
+                                        color={answers.emailProvider === 'outlook-personal' ? 'primary' : 'default'}
+                                        onClick={() => setAnswers({ ...answers, emailProvider: 'outlook-personal' })}
+                                        sx={{ cursor: 'pointer' }}
+                                    />
+                                </Stack>
+                                {(!answers.emailProvider || answers.emailProvider === 'resend-platform') && (
+                                    <Typography variant='caption' sx={{ display: 'block', mt: 1, color: 'text.secondary' }}>
+                                        ✓ Sends from platform email (zero configuration)
+                                    </Typography>
+                                )}
+                                {answers.emailProvider === 'gmail-personal' && (
+                                    <Typography variant='caption' sx={{ display: 'block', mt: 1, color: 'warning.main' }}>
+                                        Requires Gmail OAuth connection
+                                    </Typography>
+                                )}
+                                {answers.emailProvider === 'outlook-personal' && (
+                                    <Typography variant='caption' sx={{ display: 'block', mt: 1, color: 'warning.main' }}>
+                                        Requires Outlook OAuth connection
+                                    </Typography>
+                                )}
+                            </Box>
+                        )}
                         
                         {/* Email preview toggle for email delivery */}
                         {answers.delivery === 'Email' && !showEmailPreview && (
@@ -1906,24 +2156,6 @@ What would you like this workflow to do? Describe it in your own words.`,
                         >
                             📊 Preview Workflow Diagram
                         </Button>
-                    </Box>
-                )}
-
-                {/* Prominent Complete Button when ready */}
-                {canComplete && mode === 'BUILDING' && (
-                    <Box sx={{ p: 1 }}>
-                        <LoadingButton
-                            variant="contained"
-                            color="success"
-                            size="large"
-                            fullWidth
-                            onClick={handleComplete}
-                            loading={applyApi.loading}
-                            startIcon={<IconCheck size={16} />}
-                            sx={{ my: 2 }}
-                        >
-                            ✓ Complete & Build Workflow
-                        </LoadingButton>
                     </Box>
                 )}
                 
@@ -1967,10 +2199,13 @@ What would you like this workflow to do? Describe it in your own words.`,
                     onChange={(e) => setInput(e.target.value)} 
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
                     helperText={
-                        inputMatchesQuickSetup
+                        compileLoading
+                            ? '🤖 Analyzing your workflow with AI...'
+                            : inputMatchesQuickSetup
                             ? '💡 Tip: I can auto-build this workflow for you'
                             : undefined
                     }
+                    disabled={compileLoading}
                 />
                 <Button variant='contained' onClick={() => send()}><IconSend size={16} /></Button>
             </Stack>

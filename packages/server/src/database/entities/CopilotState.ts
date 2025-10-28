@@ -15,6 +15,9 @@ export class CopilotState {
     @Column('text')
     answers: string
 
+    @Column({ type: 'text', nullable: true })
+    workflowSpec?: string
+
     @CreateDateColumn()
     createdAt: Date
 
